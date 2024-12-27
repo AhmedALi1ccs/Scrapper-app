@@ -30,7 +30,7 @@ jobs:
 
     - name: Build executable
       run: |
-        pyinstaller --clean --onefile --noconsole app.spec
+        pyinstaller app.spec
 
     - name: Upload artifact
       uses: actions/upload-artifact@v4
