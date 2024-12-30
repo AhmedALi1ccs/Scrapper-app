@@ -1,437 +1,414 @@
-import streamlit as st
-import pandas as pd
-from io import BytesIO, StringIO
-import re
-import numpy as np
-from google.oauth2.service_account import Credentials
+import sys
 import os
-import json
-import io
-from dotenv import load_dotenv
-from googleapiclient.http import MediaIoBaseUpload
+import pandas as pd
+import re
+from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
+    QPushButton, QLabel, QFileDialog, QListWidget, QSpinBox, QHBoxLayout,
+    QLineEdit, QMessageBox)
+from PyQt6.QtCore import Qt
+from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
-from google.oauth2 import service_account
+from googleapiclient.http import MediaIoBaseUpload
+from io import BytesIO
 import zipfile
 from datetime import datetime
-load_dotenv()
 
-# Constants
-SCOPES = ['https://www.googleapis.com/auth/drive']
-REMOVED_FOLDER_ID = "1NWv0AjsOF-_5lmsEyL1q20liFWn1CtUk"  # Folder for "removed" files
-SCRUBBED_FOLDER_ID = "1Ink3w5hpU5sAx9EvFmPu33W7HIbE1BIz"  # Fixed folder ID
+class LogProcessorApp(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Log Processor")
+        self.setMinimumSize(800, 600)
 
-def clean_nan_values(df):
-    """
-    Replace NaN values with empty strings in the DataFrame
-    """
-    return df.replace({np.nan: '', 'nan': '', 'NaN': ''})
-def clean_number_to_text(df):
-    """
-    Converts all numeric columns to string with integer formatting (no decimals).
-    Simulates Excel's =TEXT(A1, "0") functionality.
-    
-    Args:
-        df (pd.DataFrame): DataFrame to process.
-
-    Returns:
-        pd.DataFrame: Processed DataFrame with numeric columns converted to strings.
-    """
-    for col in df.columns:
-        # Check if the column is numeric
-        if pd.api.types.is_numeric_dtype(df[col]):
-            # Convert numeric column to formatted strings without decimals
-            df[col] = df[col].apply(lambda x: f"{int(x)}" if pd.notnull(x) else "")
-    return df
-def create_zip_file(dfs_dict):
-    """
-    Create a zip file containing all CSV files
-    """
-    zip_buffer = BytesIO()
-    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-        for filename, df in dfs_dict.items():
-            # Convert dataframe to CSV
-            csv_buffer = BytesIO()
-            df.to_csv(csv_buffer, index=False)
-            csv_buffer.seek(0)
-            
-            # Add CSV to zip file - ensure only one .csv extension
-            if filename.endswith('.csv'):
-                zip_file.writestr(filename, csv_buffer.getvalue())
-            else:
-                zip_file.writestr(f"{filename}.csv", csv_buffer.getvalue())
-    
-    zip_buffer.seek(0)
-    return zip_buffer.getvalue()
-
-def authenticate():
-    """
-    Authenticate Google Drive API
-    """
-    try:
-        credentials_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
-        if not credentials_json:
-            raise ValueError("GOOGLE_CREDENTIALS_JSON not found in environment variables.")
+        # Initialize variables
+        self.list_file = None
+        self.log_files = []
+        self.conditions = []
         
-        credentials_dict = json.loads(credentials_json)
-        creds = Credentials.from_service_account_info(credentials_dict, scopes=SCOPES)
-        service = build('drive', 'v3', credentials=creds)
-        st.info("Google Drive authenticated successfully.")
-        return service
-    except Exception as e:
-        st.error(f"Google Drive authentication failed: {e}")
-        raise e
+        # Google Drive settings
+        self.REMOVED_FOLDER_ID = "18evx04gWua9ls1mDiIr5FvAQhdFbrwfr"
+        self.SCRUBBED_FOLDER_ID = "1-jYrCY5ev44Hy5fXVwOZSjw7xPSTy9ML"
+        self.service = self.authenticate()
 
-def upload_to_drive_from_memory(file_name, file_data, folder_id):
-    """
-    Upload a file directly from memory to Google Drive
-    """
-    try:
-        file_metadata = {
-            'name': file_name,
-            'parents': [folder_id],
-        }
-        media = MediaIoBaseUpload(file_data, mimetype='text/csv', resumable=True)
-        file = service.files().create(
-            body=file_metadata,
-            media_body=media,
-            fields='id'
-        ).execute()
-        st.success(f"Uploaded {file_name} to Google Drive successfully! File ID: {file.get('id')}")
-        return file.get('id')
-    except Exception as e:
-        st.error(f"Failed to upload {file_name}: {e}")
-        raise e
+        # Create main widget and layout
+        main_widget = QWidget()
+        self.setCentralWidget(main_widget)
+        layout = QVBoxLayout(main_widget)
 
-def clean_number(phone):
-    """
-    Clean and standardize phone numbers consistently
-    """
-    phone = str(phone)
-    phone = re.sub(r'\D', '', phone)
-    if phone.startswith('1') and len(phone) > 10:
-        phone = phone[1:]
-    return phone
+        # Create UI elements
+        self.create_upload_section(layout)
+        self.create_conditions_section(layout)
+        self.create_process_button(layout)
 
-def process_files(log_dfs, list_df, conditions, log_filenames):
-    """
-    Process log files by removing specific phone numbers based on conditions.
-    Returns separate removed records for each log file with only the removed numbers.
-    """
-    # Normalize list file phone numbers
-    list_df["Phone"] = list_df["Phone"].astype(str).apply(clean_number)
+        # Style the UI
+        self.style_ui()
 
-    # Compute occurrences in the list file
-    list_occurrences = (
-        list_df.groupby(["Log Type", "Phone"])
-        .size()
-        .reset_index(name="occurrence")
-    )
-    list_df = pd.merge(list_df, list_occurrences, on=["Log Type", "Phone"], how="left")
+    def style_ui(self):
+        """Apply styling to the UI elements"""
+        self.setStyleSheet("""
+            QPushButton {
+                background-color: #FF4B75;
+                color: white;
+                border: none;
+                padding: 10px;
+                border-radius: 5px;
+                min-width: 100px;
+            }
+            QPushButton:hover {
+                background-color: #FF1453;
+            }
+            QPushButton:disabled {
+                background-color: #cccccc;
+            }
+            QLabel {
+                font-size: 14px;
+                margin-top: 10px;
+            }
+        """)
 
-    # Initialize containers
-    removed_from_list = pd.DataFrame()
-    updated_log_dfs = []
-    removed_log_records = []
+    def create_upload_section(self, layout):
+        """Create the file upload section"""
+        # List file upload
+        list_label = QLabel("Upload List File (CSV):")
+        layout.addWidget(list_label)
+        
+        list_button = QPushButton("Choose List File")
+        list_button.clicked.connect(self.upload_list_file)
+        layout.addWidget(list_button)
 
-    # Parse conditions into a dictionary
-    parsed_conditions = {cond["type"].title(): cond["threshold"] for cond in conditions}
+        self.list_file_label = QLabel("No file selected")
+        layout.addWidget(self.list_file_label)
 
-    # Identify numbers to remove based on conditions
-    cleaned_phones_to_remove = []
-    for cond_type, threshold in parsed_conditions.items():
-        matching_numbers = list_df.loc[
-            (list_df["Log Type"].str.title() == cond_type) &
-            (list_df["occurrence"] >= threshold), 
-            "Phone"
-        ].unique()
+        # Log files upload
+        log_label = QLabel("Upload Log Files (CSV):")
+        layout.addWidget(log_label)
+        
+        log_button = QPushButton("Choose Log Files")
+        log_button.clicked.connect(self.upload_log_files)
+        layout.addWidget(log_button)
 
-        if len(matching_numbers) > 0:
-            current_removed = list_df[list_df["Phone"].isin(matching_numbers)]
-            removed_from_list = pd.concat([removed_from_list, current_removed])
-            list_df = list_df[~list_df["Phone"].isin(matching_numbers)]
-            cleaned_phones_to_remove.extend([clean_number(phone) for phone in matching_numbers])
+        self.log_files_list = QListWidget()
+        layout.addWidget(self.log_files_list)
 
-    # Remove duplicates from cleaned_phones_to_remove
-    cleaned_phones_to_remove = list(set(cleaned_phones_to_remove))
-    print("Numbers to remove (cleaned):", cleaned_phones_to_remove)
-    
-    # Process each log file
-    for log_df, filename in zip(log_dfs, log_filenames):
-        processed_log_df = log_df.copy()
-        removed_records = []  # Will store rows with their removed numbers
+    def create_conditions_section(self, layout):
+        """Create the conditions section"""
+        conditions_label = QLabel("Set Conditions:")
+        layout.addWidget(conditions_label)
 
-        # Normalize column names
-        processed_log_df.columns = processed_log_df.columns.str.strip().str.lower()
-        processed_log_df = processed_log_df.astype(str)
-        processed_log_df = clean_number_to_text(processed_log_df)
+        # Condition input layout
+        condition_layout = QHBoxLayout()
+        
+        self.condition_type = QLineEdit()
+        self.condition_type.setPlaceholderText("Enter Condition Type")
+        condition_layout.addWidget(self.condition_type)
 
-        # Identify potential phone number columns
-        phone_columns = [
-            col for col in processed_log_df.columns
-            if any(phrase in col.lower() for phrase in ['mobile', 'phone', 'number', 'tel', 'contact', 'ph'])
-        ]
-        print(f"\nProcessing file: {filename}")
-        print("Phone columns detected:", phone_columns)
+        self.threshold = QSpinBox()
+        self.threshold.setMinimum(1)
+        condition_layout.addWidget(self.threshold)
 
-        if not phone_columns:
-            print(f"No phone columns found in {filename}")
-            updated_log_dfs.append(processed_log_df)
-            removed_log_records.append(pd.DataFrame())
-            continue
+        add_condition_button = QPushButton("Add Condition")
+        add_condition_button.clicked.connect(self.add_condition)
+        condition_layout.addWidget(add_condition_button)
 
-        # Track rows that had numbers removed along with the removed numbers
-        for col in phone_columns:
-            # Clean the column's phone numbers
-            processed_log_df[col] = processed_log_df[col].astype(str).apply(
-                lambda x: f"{int(float(x))}" if x.replace(".", "").isdigit() else x
-            )
-            processed_log_df = clean_number_to_text(processed_log_df)
-            original_values = processed_log_df[col].copy()  # Store original values
-            cleaned_column = processed_log_df[col].apply(clean_number)
-            
-            # Identify rows to remove
-            remove_mask = cleaned_column.isin(cleaned_phones_to_remove)
-            
-            if remove_mask.any():
-                # For each row where a number was removed, store the row with only the removed number
-                for idx in processed_log_df[remove_mask].index:
-                    removed_row = processed_log_df.loc[idx].copy()
-                    original_number = original_values[idx]  # Get the original number that was removed
-                    
-                    # Clear all phone columns in the removed row
-                    for phone_col in phone_columns:
-                        removed_row[phone_col] = ''
-                    
-                    # Put back only the removed number in the current column
-                    removed_row[col] = original_number
-                    removed_records.append(removed_row)
-                
-                # Replace matching numbers with empty string in processed DataFrame
-                processed_log_df.loc[remove_mask, col] = ''
+        layout.addLayout(condition_layout)
 
-        # Create removed records DataFrame for this log file
-        if removed_records:
-            removed_records_df = pd.DataFrame(removed_records)
-            removed_records_df = clean_nan_values(removed_records_df)
-        else:
-            removed_records_df = pd.DataFrame()
+        # Conditions list
+        self.conditions_list = QListWidget()
+        layout.addWidget(self.conditions_list)
 
-        # Clean NaN values from processed log DataFrame
-        processed_log_df = clean_nan_values(processed_log_df)
+    def create_process_button(self, layout):
+        """Create the process button"""
+        self.process_button = QPushButton("Process Files")
+        self.process_button.clicked.connect(self.process_files)
+        self.process_button.setEnabled(False)
+        layout.addWidget(self.process_button)
 
-        # Add the processed DataFrames to their respective lists
-        updated_log_dfs.append(processed_log_df)
-        removed_log_records.append(removed_records_df)
-
-    # Clean NaN values from list DataFrames
-    list_df = clean_nan_values(list_df)
-    removed_from_list = clean_nan_values(removed_from_list)
-
-    return list_df, updated_log_dfs, removed_log_records
-# Initialize Streamlit app
-st.title("Log and List File Processor")
-
-# Initialize Google Drive service
-service = authenticate()
-
-# Initialize session state
-if "list_file" not in st.session_state:
-    st.session_state.list_file = None
-if "log_files" not in st.session_state:
-    st.session_state.log_files = []
-if "log_filenames" not in st.session_state:
-    st.session_state.log_filenames = []
-if "conditions" not in st.session_state:
-    st.session_state.conditions = []
-
-# File upload section
-st.header("Upload Files")
-
-# List file uploader
-uploaded_list_file = st.file_uploader("Upload List File (CSV)", type="csv")
-if uploaded_list_file:
-    st.session_state.list_file = pd.read_csv(uploaded_list_file)
-    st.session_state.list_file_name = os.path.splitext(uploaded_list_file.name)[0]
-
-# Log files uploader
-uploaded_log_files = st.file_uploader("Upload Log Files (CSV)", type="csv", accept_multiple_files=True)
-if uploaded_log_files:
-    st.session_state.log_files = [pd.read_csv(file) for file in uploaded_log_files]
-    st.session_state.log_filenames = [file.name for file in uploaded_log_files]
-
-# Display uploaded files and set conditions
-if st.session_state.list_file is not None and st.session_state.log_files:
-    list_file = st.session_state.list_file
-    log_files = st.session_state.log_files
-    log_filenames = st.session_state.log_filenames
-
-    st.write("List File Preview:")
-    st.dataframe(list_file)
-    st.write(f"{len(log_files)} Log Files Uploaded")
-
-    # Conditions section
-    st.header("Set Conditions")
-    condition_type = st.text_input("Enter Condition Type (e.g., voicemail, call):").capitalize()
-    condition_threshold = st.number_input("Enter Threshold (Occurrence Count):", min_value=1, step=1)
-
-    if st.button("Add Condition"):
-        st.session_state.conditions.append({
-            "type": condition_type,
-            "threshold": condition_threshold
-        })
-        st.success(f"Condition added: {condition_type} with threshold {condition_threshold}")
-
-    st.write("Current Conditions:")
-    if st.session_state.conditions:
-        for idx, cond in enumerate(st.session_state.conditions):
-            col1, col2 = st.columns([3, 1])
-            with col1:
-                st.write(f"{cond['type']} - min Count: {cond['threshold']}")
-            with col2:
-                if st.button("Remove", key=f"remove_{idx}"):
-                    st.session_state.conditions.pop(idx)
-                    st.success(f"Removed condition: {cond['type']} with threshold {cond['threshold']}")
-                    st.experimental_rerun()
-    else:
-        st.info("No conditions added yet.")
-
-    # Process files button
-    if st.button("Process Files"):
+    def authenticate(self):
+        """Authenticate Google Drive API"""
         try:
-            if not st.session_state.get("conditions"):
-                st.error("Please add at least one condition before processing.")
-            else:
-                # Get current date for filenames
-                current_date = datetime.now().strftime("%Y%m%d")
-                
-                # Process the files
-                updated_list_df, updated_log_dfs, removed_log_records = process_files(
-                    log_files, list_file, st.session_state.conditions, log_filenames
-                )
-                updated_list_df = updated_list_df.drop_duplicates()
-
-                # Store results in session state
-                st.session_state.updated_list_df = updated_list_df
-                st.session_state.updated_log_dfs = updated_log_dfs
-                st.session_state.removed_log_records = removed_log_records
-                list_file_name = st.session_state.list_file_name
-
-                # Remove .csv extension if present in list filename
-                list_file_base = list_file_name.replace('.csv', '')
-
-                # Upload updated list file to Google Drive
-                updated_list_io = BytesIO()
-                updated_list_df.to_csv(updated_list_io, index=False)
-                updated_list_io.seek(0)
-                upload_to_drive_from_memory(
-                    f"Updated_{list_file_base}_{current_date}.csv",
-                    updated_list_io,
-                    REMOVED_FOLDER_ID
-                )
-
-                # Upload each log file and its corresponding removed records
-                for i, log_file_name in enumerate(log_filenames):
-                    # Remove .csv extension if present
-                    log_base_name = log_file_name.replace('.csv', '')
-                    
-                    # Upload scrubbed log file
-                    scrubbed_log_io = BytesIO()
-                    st.session_state.updated_log_dfs[i].to_csv(scrubbed_log_io, index=False)
-                    scrubbed_log_io.seek(0)
-                    upload_to_drive_from_memory(
-                        f"Scrubbed_{log_base_name}_{current_date}.csv",
-                        scrubbed_log_io,
-                        SCRUBBED_FOLDER_ID
-                    )
-
-                    # Upload removed records if they exist
-                    if not st.session_state.removed_log_records[i].empty:
-                        removed_log_io = BytesIO()
-                        st.session_state.removed_log_records[i].to_csv(removed_log_io, index=False)
-                        removed_log_io.seek(0)
-                        upload_to_drive_from_memory(
-                            f"Removed_Records_{log_base_name}_{current_date}.csv",
-                            removed_log_io,
-                            REMOVED_FOLDER_ID
-                        )
-
-                st.success("Files processed and uploaded successfully!")
-
-                # Prepare files for download
-                dfs_to_zip = {
-                    f'Updated_List_File_{current_date}': st.session_state.updated_list_df
-                }
-                
-                # Add log files and their removed records to the zip dictionary
-                for i, log_file_name in enumerate(st.session_state.log_filenames):
-                    log_base_name = log_file_name.replace('.csv', '')
-                    dfs_to_zip[f'Scrubbed_{log_base_name}_{current_date}'] = st.session_state.updated_log_dfs[i]
-                    
-                    if not st.session_state.removed_log_records[i].empty:
-                        dfs_to_zip[f'Removed_Records_{log_base_name}_{current_date}'] = st.session_state.removed_log_records[i]
-
-                # Create and offer zip download
-                zip_content = create_zip_file(dfs_to_zip)
-
-                # Show success message and download button
-                st.success("Processing complete! You can now download all files.")
-                st.download_button(
-                    label="⬇️ Download All Processed Files",
-                    data=zip_content,
-                    file_name=f"all_processed_files_{current_date}.zip",
-                    mime="application/zip",
-                )
-
-                # Display previews section
-                st.subheader("File Previews")
-                st.write("Updated List File:")
-                st.dataframe(st.session_state.updated_list_df)
-
-                # Optional detailed previews
-                if st.checkbox("Show detailed file previews"):
-                    for i, log_file_name in enumerate(st.session_state.log_filenames):
-                        st.write(f"\nProcessed Log File: {log_file_name}")
-                        st.dataframe(st.session_state.updated_log_dfs[i])
-                        
-                        if not st.session_state.removed_log_records[i].empty:
-                            st.write(f"Removed Records from {log_file_name}")
-                            st.dataframe(st.session_state.removed_log_records[i])
-
-        except Exception as e:
-            st.error(f"Error processing files: {e}")
-            print(f"Detailed error: {str(e)}")  # For debugging
-    # Display results and download options
-    if "updated_list_df" in st.session_state:
-        st.subheader("Updated List File")
-        st.dataframe(st.session_state.updated_list_df)
-
-        # Prepare zip file with all processed files
-        dfs_to_zip = {
-            'Updated_List_File': st.session_state.updated_list_df
-        }
-        
-        for i, log_file_name in enumerate(st.session_state.log_filenames):
-            dfs_to_zip[f'Scrubbed_{log_file_name}'] = st.session_state.updated_log_dfs[i]
+            credentials_json = {
+                "type": "service_account",
+                "project_id": "fluent-vortex-441616-c0",
+                "private_key_id": "95db41d1457c184fb5162f337e135257e9f24312",
+                "private_key": "-----BEGIN PRIVATE KEY-----\nMIIEvAIBADANBgkqhkiG9w0BAQEFAASCBKYwggSiAgEAAoIBAQDQ9tdSKlYXp4gz\nFpFf3kYZ7f7Ry3ZWqPpp7FPL/WME9UhVEOC+Hs++zltMGw2uBtVvG5P++CCL7bdq\nRp7cFxUKh0vIiIZMZJIyBpuJucaqnOl+OAp/zr9Wt21KGnxuYd/ruT4M430ro3sx\nZC6llQm9vv1C5WrFNV3Cng05+lsawOORZHAWbssOWmwNhYjWnMGSYwkEios76E4A\n7tw7gZMwZ3qv5j7QSI9No7/igNBKRqEQ6fG/3H+LzAe30qBFMRDzjL9C/a4H2m5q\nz0JNSO03EqcqeT9ymxQBUZ65gej7aHH05o5KBvlBLlBtDmRLVgc4LyBCkzH9l5Hn\nTh/3CpaRAgMBAAECggEAC9KNqh2wgPisiCiP/wPT7hPqk0V7fvCHpv0XOAkwZo+O\nERe6E/ngSsiYDE+Jz+ILYZSY2xekvFOttwP+aS/n/P4Td7LgjkbC8rTCbOGnb6bV\nUeT0XWZ9zkCb5eQeA4y+VcUg0XRuBl+Zmf1YUSLNXG4r93KEPqPNBX2jajec5Dak\nNmVKts4lBtdI264F2mkXdMXlzXZl/XQfBWx1H2mIXHdFSpeiRW1b/rQnRDW+CEDT\nYYZKUVyRG/ElMDXKlz9usbZT3l4eKwVXSC8BKIQwjjmZCO5ScgyGkWVAPpZEECJG\nCADRIpVzAaOLGuRYZZP5RlFg/e1/NDIO1owhy+tUhQKBgQDyMH6AkeTE2MqW+YWi\nL1gBOs+5QTsLJPjwVrI9WaPAEpJdSm00eeH52p9hvR0YoyEdZVLXjIn26V4wmIlM\nijzuNaZh7YLF1LNMYDcoZjD7DnkKcg615p9flztD57BzZPYw00QJ1VjW5kbUicsN\nS/O8g1Au5aKAKLT8JYkpYFGRowKBgQDc4VJu8aLckVPYYn/W69Tm1nYMDn5wEnMO\ndIw9AjZLMQgxiWPVgX+5wF+7nU5WQP45iy7Co5p7qKeozz9to2YPWb9GplmAtI2F\nnSbZBqG//D6RCRAV01h8JnAnmehlULrB6AEvWRJ4s5iJYVLLmJfrIagU98TaeDY+\nFxkkT6ZCOwKBgD8D1yZkz31YWv4FVnvojaFkSAAPtOklaZA/Pokv9adYLbUQVHG+\n9Mkp1SZ9KkDq0QbxAikLbCpOdi92wOKlZU0lsHDyd4A5450Pu8pLLJtmHKBXJPS3\nWOhqVQVKF2Mu9c+maKGWXVMs/2j1oVuIU5bNI+PP5AQsk0q4CYQ2h4K5AoGAATvI\n6BG1ZSHyo+y45gxfHgLomdyi3CFePyBrgBO5FeZqM0yfIBwfCHyIjFWukFDAmrWq\nRy/+tt4UQZ8WrZgSA9fud4iKS2u2tp5QDzo4QQg5mTnBuz146wiT68SyRY6T3G1d\nRFRtA/uMyIegnL53arq/Y46WrNmrA+HBJDDFru0CgYAwi7AaYZ5qsh/t0PeYiBrT\n5+O4U7bZHaw33lIkpPVqsI6fHEY5kIjwBiXlcr3QX3G3OWzIvVC4KTe9PIbLFZ1h\nWiYcur8mYdLT6gA2wXklLPadhnpFiupVw1A795UUAvcTZ6dcnseWjcB9dfnvZO4m\nuJivtfQgWIer3wP4Rb6tvQ==\n-----END PRIVATE KEY-----\n",
+                "client_email": "python-api@fluent-vortex-441616-c0.iam.gserviceaccount.com",
+                "client_id": "114288392628833734729",
+                "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                "token_uri": "https://oauth2.googleapis.com/token",
+                "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+                "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/python-api%40fluent-vortex-441616-c0.iam.gserviceaccount.com"
+            }
             
-            if not st.session_state.removed_log_records[i].empty:
-                dfs_to_zip[f'Removed_Records_{log_file_name}'] = st.session_state.removed_log_records[i]
+            creds = Credentials.from_service_account_info(credentials_json, 
+                scopes=['https://www.googleapis.com/auth/drive'])
+            return build('drive', 'v3', credentials=creds)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to authenticate: {str(e)}")
+            return None
 
-        # Create and offer zip download
-        zip_content = create_zip_file(dfs_to_zip)
-        st.download_button(
-            label="⬇️ Download All Processed Files",
-            data=zip_content,
-            file_name="all_processed_files.zip",
-            mime="application/zip",
+    def upload_to_drive(self, file_name, file_data, folder_id):
+        """Upload a file to Google Drive"""
+        try:
+            file_metadata = {
+                'name': file_name,
+                'parents': [folder_id],
+            }
+            media = MediaIoBaseUpload(file_data, mimetype='text/csv', resumable=True)
+            file = self.service.files().create(
+                body=file_metadata,
+                media_body=media,
+                fields='id'
+            ).execute()
+            return file.get('id')
+        except Exception as e:
+            QMessageBox.warning(self, "Warning", f"Failed to upload {file_name}: {str(e)}")
+            return None
+
+    def upload_list_file(self):
+        """Handle list file upload"""
+        file_name, _ = QFileDialog.getOpenFileName(
+            self, "Select List File", "", "CSV Files (*.csv)")
+        if file_name:
+            try:
+                self.list_file = pd.read_csv(file_name)
+                self.list_file_label.setText(os.path.basename(file_name))
+                self.update_process_button()
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to read file: {str(e)}")
+
+    def upload_log_files(self):
+        """Handle log files upload"""
+        file_names, _ = QFileDialog.getOpenFileNames(
+            self, "Select Log Files", "", "CSV Files (*.csv)")
+        if file_names:
+            self.log_files = []
+            self.log_files_list.clear()
+            for file_name in file_names:
+                try:
+                    df = pd.read_csv(file_name)
+                    self.log_files.append(df)
+                    self.log_files_list.addItem(os.path.basename(file_name))
+                except Exception as e:
+                    QMessageBox.warning(self, "Warning", 
+                        f"Failed to read {file_name}: {str(e)}")
+            self.update_process_button()
+
+    def add_condition(self):
+        """Add a new condition"""
+        condition_type = self.condition_type.text()
+        threshold = self.threshold.value()
+        if condition_type:
+            condition = {"type": condition_type, "threshold": threshold}
+            self.conditions.append(condition)
+            self.conditions_list.addItem(
+                f"{condition_type} - min Count: {threshold}")
+            self.condition_type.clear()
+            self.threshold.setValue(1)
+            self.update_process_button()
+
+    def update_process_button(self):
+        """Update process button state"""
+        self.process_button.setEnabled(
+            self.list_file is not None and 
+            len(self.log_files) > 0 and 
+            len(self.conditions) > 0
         )
 
-        # Optional file previews
-        if st.checkbox("Show Individual File Previews"):
-            st.subheader("Log Files")
-            for i, log_file_name in enumerate(st.session_state.log_filenames):
-                st.write(f"Preview of Scrubbed Log File ({log_file_name})")
-                st.dataframe(st.session_state.updated_log_dfs[i])
+    def clean_number(self, phone):
+        """Clean and standardize phone numbers"""
+        phone = str(phone)
+        phone = re.sub(r'\D', '', phone)
+        if phone.startswith('1') and len(phone) > 10:
+            phone = phone[1:]
+        return phone
+
+    def process_files(self):
+        """Process the files"""
+        try:
+            QMessageBox.information(self, "Processing", "Processing files, please wait...")
+            self.process_button.setEnabled(False)
+
+            # Process files using your existing logic
+            updated_list_df, updated_log_dfs, removed_log_records = self.process_data(
+                self.log_files, 
+                self.list_file,
+                self.conditions, 
+                [self.log_files_list.item(i).text() for i in range(self.log_files_list.count())]
+            )
+
+            # Upload to Google Drive
+            current_date = datetime.now().strftime("%Y%m%d")
+            
+            # Upload updated list file
+            list_io = BytesIO()
+            updated_list_df.to_csv(list_io, index=False)
+            list_io.seek(0)
+            self.upload_to_drive(
+                f"Updated_List_{current_date}.csv",
+                list_io,
+                self.REMOVED_FOLDER_ID
+            )
+
+            # Upload log files and removed records
+            for i, log_df in enumerate(updated_log_dfs):
+                log_name = self.log_files_list.item(i).text()
                 
-                if not st.session_state.removed_log_records[i].empty:
-                    st.write(f"Preview of Removed Records ({log_file_name})")
-                    st.dataframe(st.session_state.removed_log_records[i])
+                # Upload scrubbed log
+                log_io = BytesIO()
+                log_df.to_csv(log_io, index=False)
+                log_io.seek(0)
+                self.upload_to_drive(
+                    f"Scrubbed_{log_name}_{current_date}.csv",
+                    log_io,
+                    self.SCRUBBED_FOLDER_ID
+                )
+
+                # Upload removed records if they exist
+                if not removed_log_records[i].empty:
+                    removed_io = BytesIO()
+                    removed_log_records[i].to_csv(removed_io, index=False)
+                    removed_io.seek(0)
+                    self.upload_to_drive(
+                        f"Removed_Records_{log_name}_{current_date}.csv",
+                        removed_io,
+                        self.REMOVED_FOLDER_ID
+                    )
+
+            # Create local zip file
+            zip_buffer = BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                # Add updated list file
+                list_csv = BytesIO()
+                updated_list_df.to_csv(list_csv, index=False)
+                list_csv.seek(0)
+                zip_file.writestr(f"Updated_List_{current_date}.csv", list_csv.getvalue())
+
+                # Add log files and their removed records
+                for i, log_df in enumerate(updated_log_dfs):
+                    log_name = self.log_files_list.item(i).text()
+                    
+                    # Add scrubbed log
+                    log_csv = BytesIO()
+                    log_df.to_csv(log_csv, index=False)
+                    log_csv.seek(0)
+                    zip_file.writestr(f"Scrubbed_{log_name}_{current_date}.csv", log_csv.getvalue())
+
+                    # Add removed records if they exist
+                    if not removed_log_records[i].empty:
+                        removed_csv = BytesIO()
+                        removed_log_records[i].to_csv(removed_csv, index=False)
+                        removed_csv.seek(0)
+                        zip_file.writestr(f"Removed_Records_{log_name}_{current_date}.csv", 
+                                        removed_csv.getvalue())
+
+            # Save zip file
+            zip_buffer.seek(0)
+            save_path, _ = QFileDialog.getSaveFileName(
+                self, "Save Processed Files", f"processed_files_{current_date}.zip", 
+                "ZIP Files (*.zip)")
+            if save_path:
+                with open(save_path, 'wb') as f:
+                    f.write(zip_buffer.getvalue())
+
+            QMessageBox.information(self, "Success", 
+                "Files processed and saved successfully!\nUploaded to Google Drive and saved locally.")
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Processing failed: {str(e)}")
+        finally:
+            self.process_button.setEnabled(True)
+
+    def process_data(self, log_dfs, list_df, conditions, log_filenames):
+        """Process the data"""
+        # Normalize list file phone numbers
+        list_df["Phone"] = list_df["Phone"].astype(str).apply(self.clean_number)
+
+        # Compute occurrences in the list file
+        list_occurrences = (
+            list_df.groupby(["Log Type", "Phone"])
+            .size()
+            .reset_index(name="occurrence")
+        )
+        list_df = pd.merge(list_df, list_occurrences, on=["Log Type", "Phone"], how="left")
+
+        # Initialize containers
+        removed_from_list = pd.DataFrame()
+        updated_log_dfs = []
+        removed_log_records = []
+
+        # Parse conditions
+        parsed_conditions = {cond["type"].title(): cond["threshold"] for cond in conditions}
+
+        # Identify numbers to remove
+        cleaned_phones_to_remove = []
+        for cond_type, threshold in parsed_conditions.items():
+            matching_numbers = list_df.loc[
+                (list_df["Log Type"].str.title() == cond_type) &
+                (list_df["occurrence"] >= threshold), 
+                "Phone"
+            ].unique()
+
+            if len(matching_numbers) > 0:
+                current_removed = list_df[list_df["Phone"].isin(matching_numbers)]
+                removed_from_list = pd.concat([removed_from_list, current_removed])
+                list_df = list_df[~list_df["Phone"].isin(matching_numbers)]
+                cleaned_phones_to_remove.extend([self.clean_number(phone) for phone in matching_numbers])
+
+        # Process each log file
+        for log_df, filename in zip(log_dfs, log_filenames):
+            processed_log_df = log_df.copy()
+            removed_records = pd.DataFrame()  # DataFrame for storing removed records
+
+            # Normalize column names
+            processed_log_df.columns = processed_log_df.columns.str.strip().str.lower()
+            processed_log_df = processed_log_df.astype(str)
+
+            # Identify potential phone number columns
+            phone_columns = [
+                col for col in processed_log_df.columns
+                if any(phrase in col.lower() for phrase in ['mobile', 'phone', 'number', 'tel', 'contact', 'ph'])
+            ]
+
+            if not phone_columns:
+                updated_log_dfs.append(processed_log_df)
+                removed_log_records.append(pd.DataFrame())
+                continue
+
+            # Track which rows have had numbers removed
+            rows_with_removed_numbers = set()
+
+            # Process each phone column
+            for col in phone_columns:
+                # Clean the column's phone numbers
+                processed_log_df[col] = processed_log_df[col].astype(str).apply(
+                    lambda x: f"{int(float(x))}" if x.replace(".", "").isdigit() else x
+                )
+                original_values = processed_log_df[col].copy()
+                cleaned_column = processed_log_df[col].apply(self.clean_number)
+
+                # Identify rows to remove
+                remove_mask = cleaned_column.isin(cleaned_phones_to_remove)
+
+                if remove_mask.any():
+                    # Store rows before clearing numbers
+                    rows_with_removed_numbers.update(processed_log_df[remove_mask].index)
+                    processed_log_df.loc[remove_mask, col] = ''
+
+            # Create removed records DataFrame
+            if rows_with_removed_numbers:
+                removed_records = processed_log_df.loc[list(rows_with_removed_numbers)].copy()
+
+            # Add processed DataFrames to lists
+            updated_log_dfs.append(processed_log_df)
+            removed_log_records.append(removed_records)
+
+        return list_df, updated_log_dfs, removed_log_records
+
+
+def main():
+    app = QApplication(sys.argv)
+    window = LogProcessorApp()
+    window.show()
+    sys.exit(app.exec())
+
+if __name__ == "__main__":
+    main()
