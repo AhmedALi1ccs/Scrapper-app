@@ -1,0 +1,53 @@
+name: Build Windows Executable
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    runs-on: windows-latest
+    
+    steps:
+    - uses: actions/checkout@v4
+    
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.9'
+        architecture: 'x64'
+
+    - name: Download Icon
+      run: |
+        Invoke-WebRequest -Uri "https://raw.githubusercontent.com/AhmedALi1ccs/Scrapper-app/main/app_icon.ico" -OutFile "app_icon.ico"
+        
+    - name: Install dependencies
+      run: |
+        python -m pip install --upgrade pip
+        pip install PyQt6==6.4.2
+        pip install pandas==1.5.3
+        pip install numpy==1.24.3
+        pip install google-auth==2.22.0
+        pip install google-auth-oauthlib==1.0.0
+        pip install google-auth-httplib2==0.1.0
+        pip install google-api-python-client==2.93.0
+        pip install python-dotenv==1.0.0
+        pip install pyinstaller==6.1.0
+        
+    - name: Build executable
+      run: |
+        pyinstaller --clean --onefile --noconsole --icon=app_icon.ico --name LogProcessor qt_app.py
+      
+    - name: Create ZIP with all required files
+      run: |
+        copy .env dist\
+        cd dist
+        Compress-Archive -Path LogProcessor.exe,.env -DestinationPath LogProcessor_Windows.zip
+        
+    - name: Upload artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: LogProcessor_Windows
+        path: dist/LogProcessor_Windows.zip
