@@ -17,51 +17,131 @@ class LogProcessorApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Log Processor")
-        self.setMinimumSize(800, 600)
-
+        self.setMinimumSize(900, 700)  # Increased window size
+        self.setContentsMargins(20, 20, 20, 20)  # Add some padding
+    
         # Initialize variables
         self.list_file = None
         self.log_files = []
         self.conditions = []
         
-        # Google Drive settings
-        self.REMOVED_FOLDER_ID = "18evx04gWua9ls1mDiIr5FvAQhdFbrwfr"
-        self.SCRUBBED_FOLDER_ID = "1-jYrCY5ev44Hy5fXVwOZSjw7xPSTy9ML"
-        self.service = self.authenticate()
-
-        # Create main widget and layout
+        # Create main widget with padding
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
-
-        # Create UI elements
+        layout.setContentsMargins(20, 20, 20, 20)
+        layout.setSpacing(15)  # Add space between elements
+    
+        # Create UI elements with headers
+        title_label = QLabel("Log File Processor")
+        title_label.setStyleSheet("""
+            font-size: 24px;
+            color: #1976D2;
+            font-weight: bold;
+            margin-bottom: 20px;
+        """)
+        layout.addWidget(title_label)
+    
+        # Create sections
         self.create_upload_section(layout)
+        layout.addSpacing(20)  # Add space between sections
         self.create_conditions_section(layout)
+        layout.addSpacing(20)
         self.create_process_button(layout)
-
+    
         # Style the UI
         self.style_ui()
 
     def style_ui(self):
-        """Apply styling to the UI elements"""
+        """Apply modern styling to the UI elements"""
         self.setStyleSheet("""
+            QMainWindow {
+                background-color: #f5f6fa;
+            }
+            
             QPushButton {
-                background-color: #FF4B75;
+                background-color: #2196F3;
                 color: white;
                 border: none;
-                padding: 10px;
-                border-radius: 5px;
-                min-width: 100px;
+                padding: 12px 20px;
+                border-radius: 6px;
+                min-width: 120px;
+                font-size: 14px;
+                font-weight: bold;
             }
+            
             QPushButton:hover {
-                background-color: #FF1453;
+                background-color: #1976D2;
+                transform: translateY(-1px);
             }
+            
+            QPushButton:pressed {
+                background-color: #1565C0;
+            }
+            
             QPushButton:disabled {
-                background-color: #cccccc;
+                background-color: #BBDEFB;
+                color: #90CAF9;
             }
+            
             QLabel {
                 font-size: 14px;
-                margin-top: 10px;
+                color: #2c3e50;
+                font-weight: bold;
+                margin: 8px 0;
+            }
+            
+            QListWidget {
+                border: 2px solid #e8e8e8;
+                border-radius: 8px;
+                padding: 5px;
+                background-color: white;
+            }
+            
+            QListWidget::item {
+                padding: 8px;
+                border-radius: 4px;
+                margin: 2px 0;
+            }
+            
+            QListWidget::item:hover {
+                background-color: #f0f0f0;
+            }
+            
+            QListWidget::item:selected {
+                background-color: #e3f2fd;
+                color: #1976D2;
+            }
+            
+            QLineEdit {
+                padding: 10px;
+                border: 2px solid #e8e8e8;
+                border-radius: 6px;
+                background-color: white;
+            }
+            
+            QLineEdit:focus {
+                border-color: #2196F3;
+            }
+            
+            QSpinBox {
+                padding: 10px;
+                border: 2px solid #e8e8e8;
+                border-radius: 6px;
+                background-color: white;
+            }
+            
+            QSpinBox:focus {
+                border-color: #2196F3;
+            }
+            
+            QMessageBox {
+                background-color: white;
+            }
+            
+            QMessageBox QPushButton {
+                min-width: 100px;
+                padding: 8px 16px;
             }
         """)
 
