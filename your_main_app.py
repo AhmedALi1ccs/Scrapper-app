@@ -14,6 +14,7 @@ import zipfile
 from datetime import datetime
 
 class LogProcessorApp(QMainWindow):
+    class LogProcessorApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Log Processor")
@@ -25,11 +26,6 @@ class LogProcessorApp(QMainWindow):
         self.log_files = []
         self.conditions = []
         
-        # Google Drive settings
-        self.REMOVED_FOLDER_ID = "18evx04gWua9ls1mDiIr5FvAQhdFbrwfr"
-        self.SCRUBBED_FOLDER_ID = "1-jYrCY5ev44Hy5fXVwOZSjw7xPSTy9ML"
-        self.service = self.authenticate()
-
         # Create main widget with padding
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
@@ -37,7 +33,7 @@ class LogProcessorApp(QMainWindow):
         layout.setContentsMargins(20, 20, 20, 20)
         layout.setSpacing(15)
 
-        # Title
+        # Add title
         title_label = QLabel("Log File Processor")
         title_label.setStyleSheet("""
             font-size: 24px;
@@ -47,7 +43,7 @@ class LogProcessorApp(QMainWindow):
         """)
         layout.addWidget(title_label)
 
-        # Create sections
+        # Create all UI sections first
         self.create_upload_section(layout)
         layout.addSpacing(20)
         self.create_conditions_section(layout)
@@ -58,6 +54,25 @@ class LogProcessorApp(QMainWindow):
 
         # Style the UI
         self.style_ui()
+
+        # Google Drive settings - moved to after UI initialization
+        self.REMOVED_FOLDER_ID = "18evx04gWua9ls1mDiIr5FvAQhdFbrwfr"
+        self.SCRUBBED_FOLDER_ID = "1-jYrCY5ev44Hy5fXVwOZSjw7xPSTy9ML"
+        
+        # Initialize Google Drive service
+        self.service = None
+        QTimer.singleShot(0, self.initialize_drive_service)
+
+    def initialize_drive_service(self):
+        """Initialize Google Drive service after UI is ready"""
+        try:
+            self.service = self.authenticate()
+            if self.service:
+                self.update_status("Google Drive authentication successful")
+            else:
+                self.update_status("Failed to authenticate with Google Drive")
+        except Exception as e:
+            self.update_status(f"Error initializing Google Drive: {str(e)}")
 
     def create_progress_section(self, layout):
         """Create progress tracking section"""
@@ -334,30 +349,28 @@ class LogProcessorApp(QMainWindow):
                 "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/python-api%40fluent-vortex-441616-c0.iam.gserviceaccount.com",
                 "universe_domain": "googleapis.com"
             }
-
+    
+            # Add proper error checking
             if not credentials_json.get("private_key"):
-                raise ValueError("Invalid private key in credentials")
-            if not credentials_json.get("client_email"):
-                raise ValueError("Missing client email in credentials")
-
+                self.update_status("Error: Invalid private key in credentials")
+                return None
+                
             creds = Credentials.from_service_account_info(
                 credentials_json, 
                 scopes=['https://www.googleapis.com/auth/drive']
             )
             
-            # Test the credentials with a simple API call
             service = build('drive', 'v3', credentials=creds)
-            service.files().list(pageSize=1).execute()  # Test API call
-            
-            self.update_status("Successfully authenticated with Google Drive")
-            return service
-        except ValueError as ve:
-            QMessageBox.critical(self, "Error", f"Invalid credentials format: {str(ve)}")
-            self.update_status("Authentication failed: Invalid credentials format")
-            return None
+            # Test the connection
+            try:
+                service.files().list(pageSize=1).execute()
+                return service
+            except Exception as e:
+                self.update_status(f"Drive API test failed: {str(e)}")
+                return None
+                
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Authentication failed: {str(e)}")
-            self.update_status("Authentication failed: General error")
+            self.update_status(f"Authentication failed: {str(e)}")
             return None
 
     def upload_to_drive(self, file_name, file_data, folder_id):
