@@ -9,31 +9,33 @@ on:
 jobs:
   build:
     runs-on: windows-latest
-
+    
     steps:
     - uses: actions/checkout@v4
-
+    
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
         python-version: '3.9'
-
-    - name: Create .env file
-      run: |
-        echo "GOOGLE_CREDENTIALS_JSON=${{ secrets.GOOGLE_CREDENTIALS_JSON }}" > .env
-
+        architecture: 'x64'
+        
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
-        pip install pyinstaller
-
+        pip install pyinstaller==6.1.0
+        
     - name: Build executable
       run: |
-        pyinstaller app.spec
-
+        pyinstaller --clean --onefile --noconsole --icon=app_icon.ico --name LogProcessor your_main_app.py
+      
+    - name: Create ZIP with all required files
+      run: |
+        cd dist
+        Compress-Archive -Path LogProcessor.exe -DestinationPath LogProcessor_Windows.zip
+        
     - name: Upload artifact
       uses: actions/upload-artifact@v4
       with:
-        name: LogProcessor
-        path: dist/LogProcessor.exe
+        name: LogProcessor_Windows
+        path: dist/LogProcessor_Windows.zip
