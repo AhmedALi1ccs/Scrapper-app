@@ -18,11 +18,17 @@ jobs:
       with:
         python-version: '3.9'
         architecture: 'x64'
-        
+    
+    - name: Set up environment
+      env:
+        GOOGLE_CREDENTIALS_JSON: ${{ secrets.GOOGLE_CREDENTIALS_JSON }}
+      run: |
+        echo "$env:GOOGLE_CREDENTIALS_JSON" | Set-Content .env
+    
     - name: Install dependencies
       run: |
         python -m pip install --upgrade pip
-        pip install PyQt6==6.4.2 PyQt6-Qt6==6.4.2 PyQt6-sip==13.5.1
+        pip install PyQt6==6.4.2
         pip install pandas==1.5.3
         pip install numpy==1.24.3
         pip install google-auth==2.22.0
@@ -32,52 +38,15 @@ jobs:
         pip install python-dotenv==1.0.0
         pip install pyinstaller==6.1.0
         
-    - name: Create spec file
-      run: |
-        echo "# -*- mode: python -*-
-        block_cipher = None
-        a = Analysis(['your_main_app.py'],
-            pathex=[],
-            binaries=[],
-            datas=[],
-            hiddenimports=['PyQt6.QtCore', 'PyQt6.QtGui', 'PyQt6.QtWidgets'],
-            hookspath=[],
-            hooksconfig={},
-            runtime_hooks=[],
-            excludes=[],
-            win_no_prefer_redirects=False,
-            win_private_assemblies=False,
-            cipher=block_cipher,
-            noarchive=False)
-        pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
-        exe = EXE(pyz,
-            a.scripts,
-            a.binaries,
-            a.zipfiles,
-            a.datas,
-            [],
-            name='LogProcessor',
-            debug=False,
-            bootloader_ignore_signals=False,
-            strip=False,
-            upx=True,
-            upx_exclude=[],
-            runtime_tmpdir=None,
-            console=False,
-            disable_windowed_traceback=False,
-            target_arch=None,
-            codesign_identity=None,
-            entitlements_file=None,
-            icon='app_icon.ico')" > windows.spec
-        
     - name: Build executable
       run: |
-        pyinstaller --clean windows.spec
+        pyinstaller --clean --onefile --noconsole --icon=app_icon.ico --name LogProcessor your_main_app.py
         
     - name: Create ZIP with required files
       run: |
         cd dist
-        Compress-Archive -Path LogProcessor.exe -DestinationPath LogProcessor_Windows.zip
+        Copy-Item ../.env .
+        Compress-Archive -Path LogProcessor.exe,.env -DestinationPath LogProcessor_Windows.zip
         
     - name: Upload artifact
       uses: actions/upload-artifact@v4
