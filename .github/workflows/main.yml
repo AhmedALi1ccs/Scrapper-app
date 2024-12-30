@@ -41,7 +41,7 @@ jobs:
         
     - name: Build executable
       run: |
-        pyinstaller --clean --onefile --noconsole --icon=app_icon.ico --name LogProcessor \
+        & pyinstaller --clean --onefile --noconsole --icon=app_icon.ico --name LogProcessor `
         --hidden-import=PyQt6.sip your_main_app.py
         
     - name: Create ZIP with required files
