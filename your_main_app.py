@@ -42,36 +42,26 @@ class LogProcessorApp(QMainWindow):
         """)
         layout.addWidget(title_label)
 
-        # Create all UI sections first
+        # Create progress section first (needed for status updates)
+        self.create_progress_section(layout)
+        
+        # Create all UI sections
         self.create_upload_section(layout)
         layout.addSpacing(20)
         self.create_conditions_section(layout)
-        layout.addSpacing(20)
-        self.create_progress_section(layout)
         layout.addSpacing(20)
         self.create_process_button(layout)
 
         # Style the UI
         self.style_ui()
 
-        # Google Drive settings - moved to after UI initialization
+        # Google Drive settings
         self.REMOVED_FOLDER_ID = "18evx04gWua9ls1mDiIr5FvAQhdFbrwfr"
         self.SCRUBBED_FOLDER_ID = "1-jYrCY5ev44Hy5fXVwOZSjw7xPSTy9ML"
         
         # Initialize Google Drive service
         self.service = None
         QTimer.singleShot(0, self.initialize_drive_service)
-
-    def initialize_drive_service(self):
-        """Initialize Google Drive service after UI is ready"""
-        try:
-            self.service = self.authenticate()
-            if self.service:
-                self.update_status("Google Drive authentication successful")
-            else:
-                self.update_status("Failed to authenticate with Google Drive")
-        except Exception as e:
-            self.update_status(f"Error initializing Google Drive: {str(e)}")
 
     def create_progress_section(self, layout):
         """Create progress tracking section"""
@@ -120,18 +110,6 @@ class LogProcessorApp(QMainWindow):
         progress_layout.addWidget(self.status_text)
 
         layout.addWidget(progress_container)
-
-    def update_status(self, message, progress=None):
-        """Update status text and progress bar"""
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        self.status_text.append(f"[{timestamp}] {message}")
-        self.status_text.verticalScrollBar().setValue(
-            self.status_text.verticalScrollBar().maximum()
-        )
-        if progress is not None:
-            self.progress_bar.setValue(progress)
-        QApplication.processEvents()
-
     def style_ui(self):
         """Apply modern styling to the UI elements"""
         self.setStyleSheet("""
@@ -215,6 +193,17 @@ class LogProcessorApp(QMainWindow):
             }
         """)
 
+    def update_status(self, message, progress=None):
+        """Update status text and progress bar"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.status_text.append(f"[{timestamp}] {message}")
+        self.status_text.verticalScrollBar().setValue(
+            self.status_text.verticalScrollBar().maximum()
+        )
+        if progress is not None:
+            self.progress_bar.setValue(progress)
+        QApplication.processEvents()
+
     def create_upload_section(self, layout):
         """Create the file upload section"""
         upload_container = QWidget()
@@ -236,11 +225,11 @@ class LogProcessorApp(QMainWindow):
         list_layout.setContentsMargins(0, 0, 0, 0)
         
         list_label = QLabel("List File (CSV):")
-        list_button = QPushButton("Choose List File")
-        list_button.clicked.connect(self.upload_list_file)
-        
         self.list_file_label = QLabel("No file selected")
         self.list_file_label.setStyleSheet("color: #666; font-weight: normal;")
+        
+        list_button = QPushButton("Choose List File")
+        list_button.clicked.connect(self.upload_list_file)
         
         list_layout.addWidget(list_label)
         list_layout.addWidget(list_button)
@@ -268,6 +257,55 @@ class LogProcessorApp(QMainWindow):
         upload_layout.addWidget(log_section)
         layout.addWidget(upload_container)
 
+    def upload_list_file(self):
+        """Handle list file upload"""
+        file_name, _ = QFileDialog.getOpenFileName(
+            self, "Select List File", "", "CSV Files (*.csv)")
+        if file_name:
+            try:
+                encodings = ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']
+                for encoding in encodings:
+                    try:
+                        self.list_file = pd.read_csv(file_name, encoding=encoding)
+                        self.list_file_label.setText(os.path.basename(file_name))
+                        self.update_status(f"Successfully loaded list file: {os.path.basename(file_name)}")
+                        self.update_process_button()
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                else:
+                    QMessageBox.critical(self, "Error", "Could not read file with any supported encoding")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to read file: {str(e)}")
+
+    def upload_log_files(self):
+        """Handle log files upload"""
+        file_names, _ = QFileDialog.getOpenFileNames(
+            self, "Select Log Files", "", "CSV Files (*.csv)")
+        if file_names:
+            self.log_files = []
+            self.log_files_list.clear()
+            total_files = len(file_names)
+            
+            for i, file_name in enumerate(file_names, 1):
+                encodings = ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']
+                for encoding in encodings:
+                    try:
+                        df = pd.read_csv(file_name, encoding=encoding)
+                        self.log_files.append(df)
+                        self.log_files_list.addItem(os.path.basename(file_name))
+                        self.update_status(f"Loaded log file ({i}/{total_files}): {os.path.basename(file_name)}")
+                        progress = (i / total_files) * 100
+                        self.progress_bar.setValue(progress)
+                        break
+                    except UnicodeDecodeError:
+                        continue
+                else:
+                    QMessageBox.warning(self, "Warning", 
+                        f"Failed to read {file_name} with any supported encoding")
+            
+            self.progress_bar.setValue(0)
+            self.update_process_button()
     def create_conditions_section(self, layout):
         """Create the conditions section"""
         conditions_container = QWidget()
@@ -332,6 +370,42 @@ class LogProcessorApp(QMainWindow):
         button_layout.addWidget(self.process_button)
         layout.addWidget(button_container)
 
+    def add_condition(self):
+        """Add a new condition"""
+        condition_type = self.condition_type.text()
+        threshold = self.threshold.value()
+        if condition_type:
+            condition = {"type": condition_type, "threshold": threshold}
+            self.conditions.append(condition)
+            self.conditions_list.addItem(
+                f"{condition_type} - min Count: {threshold}")
+            self.condition_type.clear()
+            self.threshold.setValue(1)
+            self.update_status(f"Added condition: {condition_type} with threshold {threshold}")
+            self.update_process_button()
+
+    def update_process_button(self):
+        """Update process button state"""
+        can_process = (
+            self.list_file is not None and 
+            len(self.log_files) > 0 and 
+            len(self.conditions) > 0
+        )
+        self.process_button.setEnabled(can_process)
+        if can_process:
+            self.update_status("Ready to process files")
+
+    def initialize_drive_service(self):
+        """Initialize Google Drive service after UI is ready"""
+        try:
+            self.service = self.authenticate()
+            if self.service:
+                self.update_status("Google Drive authentication successful")
+            else:
+                self.update_status("Failed to authenticate with Google Drive")
+        except Exception as e:
+            self.update_status(f"Error initializing Google Drive: {str(e)}")
+
     def authenticate(self):
         """Authenticate Google Drive API"""
         try:
@@ -348,30 +422,22 @@ class LogProcessorApp(QMainWindow):
                 "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/python-api%40fluent-vortex-441616-c0.iam.gserviceaccount.com",
                 "universe_domain": "googleapis.com"
             }
-    
-            # Add proper error checking
+
             if not credentials_json.get("private_key"):
                 self.update_status("Error: Invalid private key in credentials")
                 return None
-                
+
             creds = Credentials.from_service_account_info(
                 credentials_json, 
                 scopes=['https://www.googleapis.com/auth/drive']
             )
             
             service = build('drive', 'v3', credentials=creds)
-            # Test the connection
-            try:
-                service.files().list(pageSize=1).execute()
-                return service
-            except Exception as e:
-                self.update_status(f"Drive API test failed: {str(e)}")
-                return None
-                
+            return service
+
         except Exception as e:
             self.update_status(f"Authentication failed: {str(e)}")
             return None
-
     def upload_to_drive(self, file_name, file_data, folder_id):
         """Upload a file to Google Drive"""
         try:
@@ -392,6 +458,119 @@ class LogProcessorApp(QMainWindow):
             self.update_status(f"Failed to upload {file_name}: {str(e)}")
             QMessageBox.warning(self, "Warning", f"Failed to upload {file_name}: {str(e)}")
             return None
+
+    def clean_number(self, phone):
+        """Clean and standardize phone numbers"""
+        phone = str(phone)
+        phone = re.sub(r'\D', '', phone)
+        if phone.startswith('1') and len(phone) > 10:
+            phone = phone[1:]
+        return phone
+
+    def process_files(self):
+        """Process the files"""
+        try:
+            self.process_button.setEnabled(False)
+            self.progress_bar.setValue(0)
+            self.update_status("Starting file processing...")
+
+            # Process files
+            self.update_status("Processing files...", 10)
+            updated_list_df, updated_log_dfs, removed_log_records = self.process_data(
+                self.log_files, 
+                self.list_file,
+                self.conditions, 
+                [self.log_files_list.item(i).text() for i in range(self.log_files_list.count())]
+            )
+
+            # Upload to Google Drive
+            current_date = datetime.now().strftime("%Y%m%d")
+            
+            # Upload updated list file
+            self.update_status("Uploading processed files to Google Drive...", 70)
+            list_io = BytesIO()
+            updated_list_df.to_csv(list_io, index=False)
+            list_io.seek(0)
+            self.upload_to_drive(
+                f"Updated_List_{current_date}.csv",
+                list_io,
+                self.REMOVED_FOLDER_ID
+            )
+
+            # Upload log files and removed records
+            for i, log_df in enumerate(updated_log_dfs):
+                log_name = self.log_files_list.item(i).text()
+                
+                # Upload scrubbed log
+                log_io = BytesIO()
+                log_df.to_csv(log_io, index=False)
+                log_io.seek(0)
+                self.upload_to_drive(
+                    f"Scrubbed_{log_name}_{current_date}.csv",
+                    log_io,
+                    self.SCRUBBED_FOLDER_ID
+                )
+
+                # Upload removed records if they exist
+                if not removed_log_records[i].empty:
+                    removed_io = BytesIO()
+                    removed_log_records[i].to_csv(removed_io, index=False)
+                    removed_io.seek(0)
+                    self.upload_to_drive(
+                        f"Removed_Records_{log_name}_{current_date}.csv",
+                        removed_io,
+                        self.REMOVED_FOLDER_ID
+                    )
+
+            self.update_status("Creating download package...", 80)
+            
+            # Create local zip file
+            zip_buffer = BytesIO()
+            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                # Add updated list file
+                list_csv = BytesIO()
+                updated_list_df.to_csv(list_csv, index=False)
+                list_csv.seek(0)
+                zip_file.writestr(f"Updated_List_{current_date}.csv", list_csv.getvalue())
+
+                # Add log files and their removed records
+                for i, log_df in enumerate(updated_log_dfs):
+                    log_name = self.log_files_list.item(i).text()
+                    
+                    # Add scrubbed log
+                    log_csv = BytesIO()
+                    log_df.to_csv(log_csv, index=False)
+                    log_csv.seek(0)
+                    zip_file.writestr(f"Scrubbed_{log_name}_{current_date}.csv", log_csv.getvalue())
+
+                    # Add removed records if they exist
+                    if not removed_log_records[i].empty:
+                        removed_csv = BytesIO()
+                        removed_log_records[i].to_csv(removed_csv, index=False)
+                        removed_csv.seek(0)
+                        zip_file.writestr(f"Removed_Records_{log_name}_{current_date}.csv", 
+                                        removed_csv.getvalue())
+
+            # Save zip file
+            zip_buffer.seek(0)
+            save_path, _ = QFileDialog.getSaveFileName(
+                self, "Save Processed Files", f"processed_files_{current_date}.zip", 
+                "ZIP Files (*.zip)")
+            if save_path:
+                with open(save_path, 'wb') as f:
+                    f.write(zip_buffer.getvalue())
+                self.update_status(f"Saved processed files to {save_path}")
+
+            self.progress_bar.setValue(100)
+            self.update_status("Processing completed successfully!")
+            QMessageBox.information(self, "Success", 
+                "Files processed and saved successfully!\nUploaded to Google Drive and saved locally.")
+
+        except Exception as e:
+            self.update_status(f"Error during processing: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Processing failed: {str(e)}")
+        finally:
+            self.process_button.setEnabled(True)
 
     def process_data(self, log_dfs, list_df, conditions, log_filenames):
         """Process the data using conditions"""
@@ -446,9 +625,9 @@ class LogProcessorApp(QMainWindow):
                 self.update_status(f"Processing log file {i}/{total_logs}: {filename}")
                 
                 processed_log_df = log_df.copy()
-                removed_records = pd.DataFrame()
+                removed_records_df = pd.DataFrame()
 
-                # Normalize column names
+                # Normalize column names and data types
                 processed_log_df.columns = processed_log_df.columns.str.strip().str.lower()
                 processed_log_df = processed_log_df.astype(str)
 
@@ -477,23 +656,28 @@ class LogProcessorApp(QMainWindow):
                     # Remove matching numbers
                     remove_mask = cleaned_column.isin(cleaned_phones_to_remove)
                     if remove_mask.any():
-                        rows_with_removed_numbers.update(processed_log_df[remove_mask].index)
-                        self.update_status(f"Found {remove_mask.sum()} numbers to remove in {col}")
+                        # Store rows that had numbers removed
+                        for idx in processed_log_df[remove_mask].index:
+                            if idx not in rows_with_removed_numbers:
+                                removed_row = processed_log_df.loc[idx].copy()
+                                # Only keep the removed number in the current column
+                                for phone_col in phone_columns:
+                                    removed_row[phone_col] = original_values[idx] if phone_col == col else ''
+                                rows_with_removed_numbers.add(idx)
+                                removed_records_df = pd.concat([removed_records_df, 
+                                                          pd.DataFrame([removed_row])], 
+                                                          ignore_index=True)
+                        
                         processed_log_df.loc[remove_mask, col] = ''
-
-                # Create removed records DataFrame
-                if rows_with_removed_numbers:
-                    removed_records = processed_log_df.loc[list(rows_with_removed_numbers)].copy()
-                    self.update_status(f"Created removed records for {filename}")
+                        self.update_status(f"Removed {remove_mask.sum()} numbers from {col}")
 
                 updated_log_dfs.append(processed_log_df)
-                removed_log_records.append(removed_records)
+                removed_log_records.append(removed_records_df)
 
-                progress = 50 + (i / total_logs * 40)  # Progress from 50% to 90%
+                progress = 50 + (i / total_logs * 40)
                 self.progress_bar.setValue(progress)
 
-            self.progress_bar.setValue(100)
-            self.update_status("Data processing completed successfully!")
+            self.update_status("Data processing completed!")
             return list_df, updated_log_dfs, removed_log_records
 
         except Exception as e:
@@ -501,6 +685,7 @@ class LogProcessorApp(QMainWindow):
             raise e
 
 
+# Main entry point
 def main():
     app = QApplication(sys.argv)
     window = LogProcessorApp()
