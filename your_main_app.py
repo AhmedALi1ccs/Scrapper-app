@@ -1,519 +1,263 @@
 import sys
 import os
 import pandas as pd
-import re
-from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
-    QPushButton, QLabel, QFileDialog, QListWidget, QSpinBox, QHBoxLayout,
-    QLineEdit, QMessageBox, QProgressBar, QTextEdit)
+from datetime import datetime
+import json
+from dotenv import load_dotenv
+from PyQt6.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, 
+    QPushButton, QLabel, QFileDialog, QListWidget, QSpinBox, 
+    QHBoxLayout, QLineEdit, QMessageBox, QProgressBar, QTextEdit,
+    QScrollArea
+)
 from PyQt6.QtCore import Qt, QTimer
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
 from io import BytesIO
 import zipfile
-from datetime import datetime
-import json
-from dotenv import load_dotenv
+import re
 
 class LogProcessorApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Log Processor")
-        self.setMinimumSize(1200, 900)  # Increased window size
-        self.setContentsMargins(30, 30, 30, 30)  # Increased margins
+        self.setMinimumSize(1200, 900)
+
+        # Create a scroll area for the main content
+        scroll = QScrollArea()
+        self.setCentralWidget(scroll)
+        
+        # Create main container widget that will be scrollable
+        container = QWidget()
+        scroll.setWidget(container)
+        scroll.setWidgetResizable(True)
+        
+        # Main layout with proper spacing
+        main_layout = QVBoxLayout(container)
+        main_layout.setSpacing(20)
+        main_layout.setContentsMargins(20, 20, 20, 20)
+
+        # Title
+        title = QLabel("Log File Processor")
+        title.setStyleSheet("""
+            font-size: 24px;
+            font-weight: bold;
+            color: #2196F3;
+            padding: 10px;
+            margin-bottom: 20px;
+        """)
+        title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        main_layout.addWidget(title)
+
+        # File Upload Section
+        upload_group = QWidget()
+        upload_layout = QVBoxLayout(upload_group)
+        upload_layout.setSpacing(10)
+        upload_layout.setContentsMargins(10, 10, 10, 10)
+        
+        # List File Section
+        list_section = QWidget()
+        list_layout = QVBoxLayout(list_section)
+        list_layout.setSpacing(5)
+        
+        list_label = QLabel("List File (CSV):")
+        list_label.setStyleSheet("font-weight: bold;")
+        list_layout.addWidget(list_label)
+        
+        list_button = QPushButton("Choose List File")
+        list_button.clicked.connect(self.upload_list_file)
+        list_layout.addWidget(list_button)
+        
+        self.list_file_label = QLabel("No file selected")
+        list_layout.addWidget(self.list_file_label)
+        
+        upload_layout.addWidget(list_section)
+        
+        # Add spacing between sections
+        upload_layout.addSpacing(15)
+        
+        # Log Files Section
+        log_section = QWidget()
+        log_layout = QVBoxLayout(log_section)
+        log_layout.setSpacing(5)
+        
+        log_label = QLabel("Log Files (CSV):")
+        log_label.setStyleSheet("font-weight: bold;")
+        log_layout.addWidget(log_label)
+        
+        log_button = QPushButton("Choose Log Files")
+        log_button.clicked.connect(self.upload_log_files)
+        log_layout.addWidget(log_button)
+        
+        self.log_files_list = QListWidget()
+        self.log_files_list.setMinimumHeight(100)
+        log_layout.addWidget(self.log_files_list)
+        
+        upload_layout.addWidget(log_section)
+        main_layout.addWidget(upload_group)
+
+        # Conditions Section
+        conditions_group = QWidget()
+        conditions_layout = QVBoxLayout(conditions_group)
+        conditions_layout.setSpacing(10)
+        conditions_layout.setContentsMargins(10, 10, 10, 10)
+        
+        conditions_label = QLabel("Add Conditions")
+        conditions_label.setStyleSheet("font-weight: bold;")
+        conditions_layout.addWidget(conditions_label)
+        
+        # Condition Input Row
+        condition_input = QWidget()
+        input_layout = QHBoxLayout(condition_input)
+        input_layout.setSpacing(10)
+        
+        self.condition_type = QLineEdit()
+        self.condition_type.setPlaceholderText("Enter Condition Type")
+        input_layout.addWidget(self.condition_type)
+        
+        self.threshold = QSpinBox()
+        self.threshold.setMinimum(1)
+        self.threshold.setMaximum(9999)
+        input_layout.addWidget(self.threshold)
+        
+        add_button = QPushButton("Add")
+        add_button.clicked.connect(self.add_condition)
+        input_layout.addWidget(add_button)
+        
+        conditions_layout.addWidget(condition_input)
+        
+        # Conditions List
+        self.conditions_list = QListWidget()
+        self.conditions_list.setMinimumHeight(100)
+        conditions_layout.addWidget(self.conditions_list)
+        
+        main_layout.addWidget(conditions_group)
+
+        # Progress Section
+        progress_group = QWidget()
+        progress_layout = QVBoxLayout(progress_group)
+        progress_layout.setSpacing(10)
+        progress_layout.setContentsMargins(10, 10, 10, 10)
+        
+        progress_label = QLabel("Progress")
+        progress_label.setStyleSheet("font-weight: bold;")
+        progress_layout.addWidget(progress_label)
+        
+        self.progress_bar = QProgressBar()
+        progress_layout.addWidget(self.progress_bar)
+        
+        self.status_text = QTextEdit()
+        self.status_text.setReadOnly(True)
+        self.status_text.setMinimumHeight(100)
+        progress_layout.addWidget(self.status_text)
+        
+        main_layout.addWidget(progress_group)
+
+        # Process Button
+        self.process_button = QPushButton("Process Files")
+        self.process_button.setEnabled(False)
+        self.process_button.setMinimumHeight(40)
+        self.process_button.clicked.connect(self.process_files)
+        self.process_button.setStyleSheet("""
+            QPushButton {
+                background-color: #2196F3;
+                color: white;
+                font-weight: bold;
+                border-radius: 5px;
+                margin-top: 20px;
+            }
+            QPushButton:disabled {
+                background-color: #CCCCCC;
+            }
+        """)
+        main_layout.addWidget(self.process_button)
 
         # Initialize variables
         self.list_file = None
         self.log_files = []
         self.conditions = []
         
-        # Load environment variables
-        load_dotenv()
-        
-        # Create main widget with padding
-        main_widget = QWidget()
-        self.setCentralWidget(main_widget)
-        layout = QVBoxLayout(main_widget)
-        layout.setContentsMargins(30, 30, 30, 30)  # Increased margins
-        layout.setSpacing(25)  # Increased spacing between elements
-
-        # Add title with more space
-        title_label = QLabel("Log File Processor")
-        title_label.setStyleSheet("""
-            font-size: 28px;
-            color: #1976D2;
-            font-weight: bold;
-            margin: 20px 0;
-            padding: 10px;
-        """)
-        layout.addWidget(title_label)
-        layout.addSpacing(20)  # Add space after title
-
-        # Create progress section first (needed for status updates)
-        self.create_progress_section(layout)
-        layout.addSpacing(30)
-        
-        # Create all UI sections
-        self.create_upload_section(layout)
-        layout.addSpacing(30)
-        self.create_conditions_section(layout)
-        layout.addSpacing(30)
-        self.create_process_button(layout)
-
-        # Style the UI
-        self.style_ui()
-
-        # Google Drive settings - now using environment variables
+        # Google Drive settings
         self.REMOVED_FOLDER_ID = "18evx04gWua9ls1mDiIr5FvAQhdFbrwfr"
         self.SCRUBBED_FOLDER_ID = "1-jYrCY5ev44Hy5fXVwOZSjw7xPSTy9ML"
+        self.service = None
         
         # Initialize Google Drive service
-        self.service = None
         QTimer.singleShot(0, self.initialize_drive_service)
-    def style_ui(self):
-        """Apply modern styling to the UI elements"""
+
+        # Apply global styling
         self.setStyleSheet("""
             QMainWindow {
-                background-color: #f5f6fa;
+                background-color: #F5F5F5;
             }
-            
-            QPushButton {
-                background-color: #2196F3;
-                color: white;
-                border: none;
-                padding: 15px 25px;
-                border-radius: 8px;
-                min-width: 150px;
-                font-size: 14px;
-                font-weight: bold;
-            }
-            
-            QPushButton:hover {
-                background-color: #1976D2;
-            }
-            
-            QPushButton:pressed {
-                background-color: #1565C0;
-            }
-            
-            QPushButton:disabled {
-                background-color: #BBDEFB;
-                color: #90CAF9;
-            }
-            
             QLabel {
-                font-size: 15px;
-                color: #2c3e50;
-                font-weight: bold;
-                margin: 10px 0;
-            }
-            
-            QListWidget {
-                border: 2px solid #e8e8e8;
-                border-radius: 8px;
-                padding: 10px;
-                background-color: white;
-                min-height: 200px;
-            }
-            
-            QListWidget::item {
-                padding: 10px;
-                border-radius: 4px;
-                margin: 3px 0;
-            }
-            
-            QListWidget::item:hover {
-                background-color: #f0f0f0;
-            }
-            
-            QListWidget::item:selected {
-                background-color: #e3f2fd;
-                color: #1976D2;
-            }
-            
-            QLineEdit {
-                padding: 12px;
-                border: 2px solid #e8e8e8;
-                border-radius: 8px;
-                background-color: white;
                 font-size: 14px;
             }
-            
-            QLineEdit:focus {
-                border-color: #2196F3;
-            }
-            
-            QSpinBox {
-                padding: 12px;
-                border: 2px solid #e8e8e8;
-                border-radius: 8px;
-                background-color: white;
-                font-size: 14px;
-                min-width: 100px;
-            }
-            
-            QSpinBox:focus {
-                border-color: #2196F3;
-            }
-
-            QTextEdit {
-                font-size: 14px;
-                padding: 10px;
-            }
-        """)
-
-    def create_progress_section(self, layout):
-        """Create progress tracking section"""
-        progress_container = QWidget()
-        progress_layout = QVBoxLayout(progress_container)
-        progress_layout.setContentsMargins(10, 10, 10, 10)
-        progress_layout.setSpacing(15)
-
-        # Progress header
-        header = QLabel("Progress")
-        header.setStyleSheet("""
-            font-size: 20px;
-            color: #1976D2;
-            font-weight: bold;
-            padding: 10px 0;
-        """)
-        progress_layout.addWidget(header)
-
-        # Progress bar
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setStyleSheet("""
-            QProgressBar {
-                border: 2px solid #e8e8e8;
-                border-radius: 8px;
-                text-align: center;
-                height: 30px;
-                font-size: 14px;
-                font-weight: bold;
-            }
-            QProgressBar::chunk {
-                background-color: #2196F3;
-                border-radius: 6px;
-            }
-        """)
-        progress_layout.addWidget(self.progress_bar)
-
-        # Status updates text area
-        self.status_text = QTextEdit()
-        self.status_text.setReadOnly(True)
-        self.status_text.setMinimumHeight(150)
-        self.status_text.setStyleSheet("""
-            QTextEdit {
-                border: 2px solid #e8e8e8;
-                border-radius: 8px;
-                padding: 10px;
-                background-color: white;
-                font-family: Arial;
-            }
-        """)
-        progress_layout.addWidget(self.status_text)
-
-        layout.addWidget(progress_container)
-
-    def create_upload_section(self, layout):
-        """Create the file upload section"""
-        upload_container = QWidget()
-        upload_layout = QVBoxLayout(upload_container)
-        upload_layout.setContentsMargins(10, 10, 10, 10)
-        upload_layout.setSpacing(20)
-        
-        header = QLabel("File Upload")
-        header.setStyleSheet("""
-            font-size: 20px;
-            color: #1976D2;
-            font-weight: bold;
-            padding: 10px 0;
-        """)
-        upload_layout.addWidget(header)
-
-        # List file section
-        list_section = QWidget()
-        list_layout = QVBoxLayout(list_section)
-        list_layout.setContentsMargins(0, 0, 0, 0)
-        list_layout.setSpacing(10)
-        
-        list_label = QLabel("List File (CSV):")
-        self.list_file_label = QLabel("No file selected")
-        self.list_file_label.setStyleSheet("color: #666; font-weight: normal;")
-        
-        list_button = QPushButton("Choose List File")
-        list_button.clicked.connect(self.upload_list_file)
-        
-        list_layout.addWidget(list_label)
-        list_layout.addWidget(list_button)
-        list_layout.addWidget(self.list_file_label)
-        
-        upload_layout.addWidget(list_section)
-        upload_layout.addSpacing(20)
-
-        # Log files section
-        log_section = QWidget()
-        log_layout = QVBoxLayout(log_section)
-        log_layout.setContentsMargins(0, 0, 0, 0)
-        log_layout.setSpacing(10)
-        
-        log_label = QLabel("Log Files (CSV):")
-        log_button = QPushButton("Choose Log Files")
-        log_button.clicked.connect(self.upload_log_files)
-        
-        self.log_files_list = QListWidget()
-        self.log_files_list.setMinimumHeight(250)  # Increased height
-        
-        log_layout.addWidget(log_label)
-        log_layout.addWidget(log_button)
-        log_layout.addWidget(self.log_files_list)
-        
-        upload_layout.addWidget(log_section)
-        layout.addWidget(upload_container)
-    def create_conditions_section(self, layout):
-        """Create the conditions section"""
-        conditions_container = QWidget()
-        conditions_layout = QVBoxLayout(conditions_container)
-        conditions_layout.setContentsMargins(10, 10, 10, 10)
-        conditions_layout.setSpacing(20)
-        
-        header = QLabel("Conditions")
-        header.setStyleSheet("""
-            font-size: 20px;
-            color: #1976D2;
-            font-weight: bold;
-            padding: 10px 0;
-        """)
-        conditions_layout.addWidget(header)
-
-        # Input section
-        input_widget = QWidget()
-        input_layout = QHBoxLayout(input_widget)
-        input_layout.setContentsMargins(0, 0, 0, 0)
-        input_layout.setSpacing(15)
-        
-        self.condition_type = QLineEdit()
-        self.condition_type.setPlaceholderText("Enter Condition Type")
-        self.condition_type.setMinimumWidth(300)
-        
-        self.threshold = QSpinBox()
-        self.threshold.setMinimum(1)
-        self.threshold.setMaximum(9999)
-        self.threshold.setValue(1)
-        
-        add_condition_button = QPushButton("Add Condition")
-        add_condition_button.clicked.connect(self.add_condition)
-        
-        input_layout.addWidget(self.condition_type, stretch=2)
-        input_layout.addWidget(self.threshold, stretch=1)
-        input_layout.addWidget(add_condition_button, stretch=1)
-        
-        conditions_layout.addWidget(input_widget)
-
-        # Added conditions list
-        conditions_label = QLabel("Added Conditions:")
-        conditions_label.setStyleSheet("""
-            font-size: 15px;
-            margin-top: 15px;
-        """)
-        conditions_layout.addWidget(conditions_label)
-        
-        self.conditions_list = QListWidget()
-        self.conditions_list.setMinimumHeight(150)
-        conditions_layout.addWidget(self.conditions_list)
-        
-        layout.addWidget(conditions_container)
-
-    def create_process_button(self, layout):
-        """Create the process button"""
-        button_container = QWidget()
-        button_layout = QVBoxLayout(button_container)
-        button_layout.setContentsMargins(10, 20, 10, 20)
-        button_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        
-        self.process_button = QPushButton("Process Files")
-        self.process_button.clicked.connect(self.process_files)
-        self.process_button.setEnabled(False)
-        self.process_button.setMinimumHeight(60)
-        self.process_button.setMinimumWidth(200)
-        self.process_button.setStyleSheet("""
             QPushButton {
-                font-size: 18px;
-                background-color: #2196F3;
-                padding: 15px 30px;
+                padding: 8px;
+                font-size: 14px;
             }
-            QPushButton:hover {
-                background-color: #1976D2;
+            QListWidget {
+                border: 1px solid #CCCCCC;
+                border-radius: 5px;
+                background-color: white;
             }
-            QPushButton:pressed {
-                background-color: #1565C0;
+            QLineEdit, QSpinBox {
+                padding: 8px;
+                border: 1px solid #CCCCCC;
+                border-radius: 5px;
             }
-            QPushButton:disabled {
-                background-color: #BBDEFB;
-                color: #90CAF9;
+            QWidget {
+                background-color: transparent;
             }
         """)
-        
-        button_layout.addWidget(self.process_button)
-        layout.addWidget(button_container)
-
-    def update_status(self, message, progress=None):
-        """Update status text and progress bar"""
-        timestamp = datetime.now().strftime("%H:%M:%S")
-        self.status_text.append(f"[{timestamp}] {message}")
-        self.status_text.verticalScrollBar().setValue(
-            self.status_text.verticalScrollBar().maximum()
-        )
-        if progress is not None:
-            self.progress_bar.setValue(progress)
-        QApplication.processEvents()
-
-    def initialize_drive_service(self):
-        """Initialize Google Drive service after UI is ready"""
-        try:
-            self.service = self.authenticate()
-            if self.service:
-                self.update_status("Google Drive authentication successful")
-            else:
-                self.update_status("Failed to authenticate with Google Drive")
-        except Exception as e:
-            self.update_status(f"Error initializing Google Drive: {str(e)}")
-
-    def add_condition(self):
-        """Add a new condition"""
-        condition_type = self.condition_type.text().strip()
-        threshold = self.threshold.value()
-        if condition_type:
-            condition = {"type": condition_type, "threshold": threshold}
-            self.conditions.append(condition)
-            self.conditions_list.addItem(
-                f"{condition_type} - min Count: {threshold}")
-            self.condition_type.clear()
-            self.threshold.setValue(1)
-            self.update_status(f"Added condition: {condition_type} with threshold {threshold}")
-            self.update_process_button()
-        else:
-            QMessageBox.warning(self, "Warning", "Please enter a condition type")
-
-    def update_process_button(self):
-        """Update process button state"""
-        can_process = (
-            self.list_file is not None and 
-            len(self.log_files) > 0 and 
-            len(self.conditions) > 0
-        )
-        self.process_button.setEnabled(can_process)
-        if can_process:
-            self.update_status("Ready to process files")
-    def authenticate(self):
-        """Authenticate Google Drive API"""
-        try:
-            # Get credentials from environment variable
-            credentials_json_str = os.getenv("GOOGLE_CREDENTIALS_JSON")
-            if not credentials_json_str:
-                self.update_status("Error: No Google credentials found in environment")
-                return None
-
-            try:
-                credentials_json = json.loads(credentials_json_str)
-            except json.JSONDecodeError:
-                self.update_status("Error: Invalid Google credentials format")
-                return None
-
-            creds = Credentials.from_service_account_info(
-                credentials_json, 
-                scopes=['https://www.googleapis.com/auth/drive']
-            )
-            
-            service = build('drive', 'v3', credentials=creds)
-            return service
-
-        except Exception as e:
-            self.update_status(f"Authentication failed: {str(e)}")
-            return None
-
-    def upload_to_drive(self, file_name, file_data, folder_id):
-        """Upload a file to Google Drive"""
-        try:
-            self.update_status(f"Uploading {file_name} to Google Drive...")
-            file_metadata = {
-                'name': file_name,
-                'parents': [folder_id],
-            }
-            media = MediaIoBaseUpload(file_data, mimetype='text/csv', resumable=True)
-            file = self.service.files().create(
-                body=file_metadata,
-                media_body=media,
-                fields='id'
-            ).execute()
-            self.update_status(f"Successfully uploaded {file_name}")
-            return file.get('id')
-        except Exception as e:
-            self.update_status(f"Failed to upload {file_name}: {str(e)}")
-            QMessageBox.warning(self, "Warning", f"Failed to upload {file_name}: {str(e)}")
-            return None
 
     def upload_list_file(self):
-        """Handle list file upload"""
         file_name, _ = QFileDialog.getOpenFileName(
-            self, "Select List File", "", "CSV Files (*.csv)")
+            self,
+            "Select List File",
+            "",
+            "CSV Files (*.csv);;All Files (*)"
+        )
         if file_name:
-            try:
-                encodings = ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']
-                for encoding in encodings:
-                    try:
-                        df = pd.read_csv(file_name, encoding=encoding)
-                        # Replace NaN values with empty strings
-                        df = df.fillna('').replace(['nan', 'NaN', 'NaT'], '')
-                        self.list_file = df
-                        self.list_file_label.setText(os.path.basename(file_name))
-                        self.update_status(f"Successfully loaded list file: {os.path.basename(file_name)}")
-                        self.update_process_button()
-                        break
-                    except UnicodeDecodeError:
-                        continue
-                else:
-                    QMessageBox.critical(self, "Error", "Could not read file with any supported encoding")
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to read file: {str(e)}")
-
-    def upload_log_files(self):
-        """Handle log files upload"""
-        file_names, _ = QFileDialog.getOpenFileNames(
-            self, "Select Log Files", "", "CSV Files (*.csv)")
-        if file_names:
-            self.log_files = []
-            self.log_files_list.clear()
-            total_files = len(file_names)
-            
-            for i, file_name in enumerate(file_names, 1):
-                encodings = ['utf-8', 'latin1', 'cp1252', 'iso-8859-1']
-                for encoding in encodings:
-                    try:
-                        df = pd.read_csv(file_name, encoding=encoding)
-                        # Replace NaN values with empty strings
-                        df = df.fillna('').replace(['nan', 'NaN', 'NaT'], '')
-                        self.log_files.append(df)
-                        self.log_files_list.addItem(os.path.basename(file_name))
-                        self.update_status(f"Loaded log file ({i}/{total_files}): {os.path.basename(file_name)}")
-                        progress = (i / total_files) * 100
-                        self.progress_bar.setValue(progress)
-                        break
-                    except UnicodeDecodeError:
-                        continue
-                else:
-                    QMessageBox.warning(self, "Warning", 
-                        f"Failed to read {file_name} with any supported encoding")
-            
-            self.progress_bar.setValue(0)
+            self.list_file = file_name
+            self.list_file_label.setText(os.path.basename(file_name))
             self.update_process_button()
 
-    def clean_number(self, phone):
-        """Clean and standardize phone numbers"""
-        phone = str(phone)
-        phone = re.sub(r'\D', '', phone)
-        if phone.startswith('1') and len(phone) > 10:
-            phone = phone[1:]
-        return phone
+    def upload_log_files(self):
+        file_names, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Select Log Files",
+            "",
+            "CSV Files (*.csv);;All Files (*)"
+        )
+        if file_names:
+            self.log_files.extend(file_names)
+            self.log_files_list.clear()
+            for file in self.log_files:
+                self.log_files_list.addItem(os.path.basename(file))
+            self.update_process_button()
+
+    def add_condition(self):
+        condition_type = self.condition_type.text().strip()
+        threshold = self.threshold.value()
+        
+        if condition_type:
+            condition_text = f"{condition_type} - min Count: {threshold}"
+            self.conditions_list.addItem(condition_text)
+            self.conditions.append({"type": condition_type, "threshold": threshold})
+            self.condition_type.clear()
+            self.threshold.setValue(1)
+            self.update_process_button()
+
+    def update_process_button(self):
+        self.process_button.setEnabled(
+            bool(self.list_file) and 
+            bool(self.log_files) and 
+            bool(self.conditions)
+        )
+
     def process_files(self):
         """Process the files"""
         try:
@@ -744,13 +488,34 @@ class LogProcessorApp(QMainWindow):
             self.update_status(f"Error processing data: {str(e)}")
             raise e
 
+    def clean_df(self, df):
+        """Replace all NaN values with empty strings"""
+        return df.fillna('').replace(['nan', 'NaN', 'NaT'], '')
+
+    def clean_number(self, phone):
+        """Clean and standardize phone numbers"""
+        phone = str(phone)
+        phone = re.sub(r'\D', '', phone)
+        if phone.startswith('1') and len(phone) > 10:
+            phone = phone[1:]
+        return phone
+
+    def initialize_drive_service(self):
+        """Initialize Google Drive service"""
+        try:
+            credentials = Credentials.from_service_account_file(
+                'credentials.json',
+                scopes=['https://www.googleapis.com/auth/drive.file']
+            )
+            self.service = build('drive', 'v3', credentials=credentials)
+        except Exception as e:
+            self.status_text.append(f"Failed to initialize Drive service: {str(e)}")
 
 def main():
     app = QApplication(sys.argv)
     window = LogProcessorApp()
     window.show()
     sys.exit(app.exec())
-
 
 if __name__ == "__main__":
     main()
