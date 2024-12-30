@@ -4,8 +4,8 @@ import pandas as pd
 import re
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
     QPushButton, QLabel, QFileDialog, QListWidget, QSpinBox, QHBoxLayout,
-    QLineEdit, QMessageBox)
-from PyQt6.QtCore import Qt
+    QLineEdit, QMessageBox, QProgressBar, QTextEdit)
+from PyQt6.QtCore import Qt, QTimer
 from google.oauth2.service_account import Credentials
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaIoBaseUpload
@@ -17,22 +17,27 @@ class LogProcessorApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Log Processor")
-        self.setMinimumSize(900, 700)  # Increased window size
-        self.setContentsMargins(20, 20, 20, 20)  # Add some padding
-    
+        self.setMinimumSize(1000, 800)
+        self.setContentsMargins(20, 20, 20, 20)
+
         # Initialize variables
         self.list_file = None
         self.log_files = []
         self.conditions = []
         
+        # Google Drive settings
+        self.REMOVED_FOLDER_ID = "18evx04gWua9ls1mDiIr5FvAQhdFbrwfr"
+        self.SCRUBBED_FOLDER_ID = "1-jYrCY5ev44Hy5fXVwOZSjw7xPSTy9ML"
+        self.service = self.authenticate()
+
         # Create main widget with padding
         main_widget = QWidget()
         self.setCentralWidget(main_widget)
         layout = QVBoxLayout(main_widget)
         layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(15)  # Add space between elements
-    
-        # Create UI elements with headers
+        layout.setSpacing(15)
+
+        # Title
         title_label = QLabel("Log File Processor")
         title_label.setStyleSheet("""
             font-size: 24px;
@@ -41,16 +46,77 @@ class LogProcessorApp(QMainWindow):
             margin-bottom: 20px;
         """)
         layout.addWidget(title_label)
-    
+
         # Create sections
         self.create_upload_section(layout)
-        layout.addSpacing(20)  # Add space between sections
+        layout.addSpacing(20)
         self.create_conditions_section(layout)
         layout.addSpacing(20)
+        self.create_progress_section(layout)
+        layout.addSpacing(20)
         self.create_process_button(layout)
-    
+
         # Style the UI
         self.style_ui()
+
+    def create_progress_section(self, layout):
+        """Create progress tracking section"""
+        progress_container = QWidget()
+        progress_layout = QVBoxLayout(progress_container)
+        progress_layout.setContentsMargins(0, 0, 0, 0)
+
+        # Progress header
+        header = QLabel("Progress")
+        header.setStyleSheet("""
+            font-size: 18px;
+            color: #1976D2;
+            font-weight: bold;
+            padding-bottom: 10px;
+        """)
+        progress_layout.addWidget(header)
+
+        # Progress bar
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setStyleSheet("""
+            QProgressBar {
+                border: 2px solid #e8e8e8;
+                border-radius: 5px;
+                text-align: center;
+                height: 25px;
+            }
+            QProgressBar::chunk {
+                background-color: #2196F3;
+                border-radius: 3px;
+            }
+        """)
+        progress_layout.addWidget(self.progress_bar)
+
+        # Status updates text area
+        self.status_text = QTextEdit()
+        self.status_text.setReadOnly(True)
+        self.status_text.setMinimumHeight(100)
+        self.status_text.setStyleSheet("""
+            QTextEdit {
+                border: 2px solid #e8e8e8;
+                border-radius: 8px;
+                padding: 10px;
+                background-color: white;
+            }
+        """)
+        progress_layout.addWidget(self.status_text)
+
+        layout.addWidget(progress_container)
+
+    def update_status(self, message, progress=None):
+        """Update status text and progress bar"""
+        timestamp = datetime.now().strftime("%H:%M:%S")
+        self.status_text.append(f"[{timestamp}] {message}")
+        self.status_text.verticalScrollBar().setValue(
+            self.status_text.verticalScrollBar().maximum()
+        )
+        if progress is not None:
+            self.progress_bar.setValue(progress)
+        QApplication.processEvents()
 
     def style_ui(self):
         """Apply modern styling to the UI elements"""
@@ -72,7 +138,6 @@ class LogProcessorApp(QMainWindow):
             
             QPushButton:hover {
                 background-color: #1976D2;
-                transform: translateY(-1px);
             }
             
             QPushButton:pressed {
@@ -134,73 +199,124 @@ class LogProcessorApp(QMainWindow):
             QSpinBox:focus {
                 border-color: #2196F3;
             }
-            
-            QMessageBox {
-                background-color: white;
-            }
-            
-            QMessageBox QPushButton {
-                min-width: 100px;
-                padding: 8px 16px;
-            }
         """)
 
     def create_upload_section(self, layout):
         """Create the file upload section"""
-        # List file upload
-        list_label = QLabel("Upload List File (CSV):")
-        layout.addWidget(list_label)
+        upload_container = QWidget()
+        upload_layout = QVBoxLayout(upload_container)
+        upload_layout.setContentsMargins(0, 0, 0, 0)
         
+        header = QLabel("File Upload")
+        header.setStyleSheet("""
+            font-size: 18px;
+            color: #1976D2;
+            font-weight: bold;
+            padding-bottom: 10px;
+        """)
+        upload_layout.addWidget(header)
+
+        # List file section
+        list_section = QWidget()
+        list_layout = QVBoxLayout(list_section)
+        list_layout.setContentsMargins(0, 0, 0, 0)
+        
+        list_label = QLabel("List File (CSV):")
         list_button = QPushButton("Choose List File")
         list_button.clicked.connect(self.upload_list_file)
-        layout.addWidget(list_button)
-
-        self.list_file_label = QLabel("No file selected")
-        layout.addWidget(self.list_file_label)
-
-        # Log files upload
-        log_label = QLabel("Upload Log Files (CSV):")
-        layout.addWidget(log_label)
         
+        self.list_file_label = QLabel("No file selected")
+        self.list_file_label.setStyleSheet("color: #666; font-weight: normal;")
+        
+        list_layout.addWidget(list_label)
+        list_layout.addWidget(list_button)
+        list_layout.addWidget(self.list_file_label)
+        
+        upload_layout.addWidget(list_section)
+        upload_layout.addSpacing(15)
+
+        # Log files section
+        log_section = QWidget()
+        log_layout = QVBoxLayout(log_section)
+        log_layout.setContentsMargins(0, 0, 0, 0)
+        
+        log_label = QLabel("Log Files (CSV):")
         log_button = QPushButton("Choose Log Files")
         log_button.clicked.connect(self.upload_log_files)
-        layout.addWidget(log_button)
-
+        
         self.log_files_list = QListWidget()
-        layout.addWidget(self.log_files_list)
+        self.log_files_list.setMinimumHeight(150)
+        
+        log_layout.addWidget(log_label)
+        log_layout.addWidget(log_button)
+        log_layout.addWidget(self.log_files_list)
+        
+        upload_layout.addWidget(log_section)
+        layout.addWidget(upload_container)
 
     def create_conditions_section(self, layout):
         """Create the conditions section"""
-        conditions_label = QLabel("Set Conditions:")
-        layout.addWidget(conditions_label)
+        conditions_container = QWidget()
+        conditions_layout = QVBoxLayout(conditions_container)
+        conditions_layout.setContentsMargins(0, 0, 0, 0)
+        
+        header = QLabel("Conditions")
+        header.setStyleSheet("""
+            font-size: 18px;
+            color: #1976D2;
+            font-weight: bold;
+            padding-bottom: 10px;
+        """)
+        conditions_layout.addWidget(header)
 
-        # Condition input layout
-        condition_layout = QHBoxLayout()
+        input_widget = QWidget()
+        input_layout = QHBoxLayout(input_widget)
+        input_layout.setContentsMargins(0, 0, 0, 0)
         
         self.condition_type = QLineEdit()
         self.condition_type.setPlaceholderText("Enter Condition Type")
-        condition_layout.addWidget(self.condition_type)
-
+        
         self.threshold = QSpinBox()
         self.threshold.setMinimum(1)
-        condition_layout.addWidget(self.threshold)
-
+        self.threshold.setFixedWidth(100)
+        
         add_condition_button = QPushButton("Add Condition")
         add_condition_button.clicked.connect(self.add_condition)
-        condition_layout.addWidget(add_condition_button)
+        
+        input_layout.addWidget(self.condition_type, stretch=2)
+        input_layout.addWidget(self.threshold, stretch=1)
+        input_layout.addWidget(add_condition_button, stretch=1)
+        
+        conditions_layout.addWidget(input_widget)
 
-        layout.addLayout(condition_layout)
-
-        # Conditions list
+        conditions_label = QLabel("Added Conditions:")
+        conditions_label.setStyleSheet("margin-top: 15px;")
+        conditions_layout.addWidget(conditions_label)
+        
         self.conditions_list = QListWidget()
-        layout.addWidget(self.conditions_list)
+        self.conditions_list.setMinimumHeight(100)
+        conditions_layout.addWidget(self.conditions_list)
+        
+        layout.addWidget(conditions_container)
 
     def create_process_button(self, layout):
         """Create the process button"""
+        button_container = QWidget()
+        button_layout = QVBoxLayout(button_container)
+        button_layout.setContentsMargins(0, 0, 0, 0)
+        
         self.process_button = QPushButton("Process Files")
         self.process_button.clicked.connect(self.process_files)
         self.process_button.setEnabled(False)
-        layout.addWidget(self.process_button)
+        self.process_button.setMinimumHeight(50)
+        self.process_button.setStyleSheet("""
+            QPushButton {
+                font-size: 16px;
+            }
+        """)
+        
+        button_layout.addWidget(self.process_button)
+        layout.addWidget(button_container)
 
     def authenticate(self):
         """Authenticate Google Drive API"""
@@ -215,19 +331,39 @@ class LogProcessorApp(QMainWindow):
                 "auth_uri": "https://accounts.google.com/o/oauth2/auth",
                 "token_uri": "https://oauth2.googleapis.com/token",
                 "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
-                "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/python-api%40fluent-vortex-441616-c0.iam.gserviceaccount.com"
+                "client_x509_cert_url": "https://www.googleapis.com/robot/v1/metadata/x509/python-api%40fluent-vortex-441616-c0.iam.gserviceaccount.com",
+                "universe_domain": "googleapis.com"
             }
+
+            if not credentials_json.get("private_key"):
+                raise ValueError("Invalid private key in credentials")
+            if not credentials_json.get("client_email"):
+                raise ValueError("Missing client email in credentials")
+
+            creds = Credentials.from_service_account_info(
+                credentials_json, 
+                scopes=['https://www.googleapis.com/auth/drive']
+            )
             
-            creds = Credentials.from_service_account_info(credentials_json, 
-                scopes=['https://www.googleapis.com/auth/drive'])
-            return build('drive', 'v3', credentials=creds)
+            # Test the credentials with a simple API call
+            service = build('drive', 'v3', credentials=creds)
+            service.files().list(pageSize=1).execute()  # Test API call
+            
+            self.update_status("Successfully authenticated with Google Drive")
+            return service
+        except ValueError as ve:
+            QMessageBox.critical(self, "Error", f"Invalid credentials format: {str(ve)}")
+            self.update_status("Authentication failed: Invalid credentials format")
+            return None
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Failed to authenticate: {str(e)}")
+            QMessageBox.critical(self, "Error", f"Authentication failed: {str(e)}")
+            self.update_status("Authentication failed: General error")
             return None
 
     def upload_to_drive(self, file_name, file_data, folder_id):
         """Upload a file to Google Drive"""
         try:
+            self.update_status(f"Uploading {file_name} to Google Drive...")
             file_metadata = {
                 'name': file_name,
                 'parents': [folder_id],
@@ -238,250 +374,119 @@ class LogProcessorApp(QMainWindow):
                 media_body=media,
                 fields='id'
             ).execute()
+            self.update_status(f"Successfully uploaded {file_name}")
             return file.get('id')
         except Exception as e:
+            self.update_status(f"Failed to upload {file_name}: {str(e)}")
             QMessageBox.warning(self, "Warning", f"Failed to upload {file_name}: {str(e)}")
             return None
 
-    def upload_list_file(self):
-        """Handle list file upload"""
-        file_name, _ = QFileDialog.getOpenFileName(
-            self, "Select List File", "", "CSV Files (*.csv)")
-        if file_name:
-            try:
-                self.list_file = pd.read_csv(file_name)
-                self.list_file_label.setText(os.path.basename(file_name))
-                self.update_process_button()
-            except Exception as e:
-                QMessageBox.critical(self, "Error", f"Failed to read file: {str(e)}")
-
-    def upload_log_files(self):
-        """Handle log files upload"""
-        file_names, _ = QFileDialog.getOpenFileNames(
-            self, "Select Log Files", "", "CSV Files (*.csv)")
-        if file_names:
-            self.log_files = []
-            self.log_files_list.clear()
-            for file_name in file_names:
-                try:
-                    df = pd.read_csv(file_name)
-                    self.log_files.append(df)
-                    self.log_files_list.addItem(os.path.basename(file_name))
-                except Exception as e:
-                    QMessageBox.warning(self, "Warning", 
-                        f"Failed to read {file_name}: {str(e)}")
-            self.update_process_button()
-
-    def add_condition(self):
-        """Add a new condition"""
-        condition_type = self.condition_type.text()
-        threshold = self.threshold.value()
-        if condition_type:
-            condition = {"type": condition_type, "threshold": threshold}
-            self.conditions.append(condition)
-            self.conditions_list.addItem(
-                f"{condition_type} - min Count: {threshold}")
-            self.condition_type.clear()
-            self.threshold.setValue(1)
-            self.update_process_button()
-
-    def update_process_button(self):
-        """Update process button state"""
-        self.process_button.setEnabled(
-            self.list_file is not None and 
-            len(self.log_files) > 0 and 
-            len(self.conditions) > 0
-        )
-
-    def clean_number(self, phone):
-        """Clean and standardize phone numbers"""
-        phone = str(phone)
-        phone = re.sub(r'\D', '', phone)
-        if phone.startswith('1') and len(phone) > 10:
-            phone = phone[1:]
-        return phone
-
-    def process_files(self):
-        """Process the files"""
+    def process_data(self, log_dfs, list_df, conditions, log_filenames):
+        """Process the data using conditions"""
         try:
-            QMessageBox.information(self, "Processing", "Processing files, please wait...")
-            self.process_button.setEnabled(False)
+            self.update_status("Starting data processing...")
+            self.progress_bar.setValue(10)
 
-            # Process files using your existing logic
-            updated_list_df, updated_log_dfs, removed_log_records = self.process_data(
-                self.log_files, 
-                self.list_file,
-                self.conditions, 
-                [self.log_files_list.item(i).text() for i in range(self.log_files_list.count())]
+            # Normalize list file phone numbers
+            list_df["Phone"] = list_df["Phone"].astype(str).apply(self.clean_number)
+            self.update_status("Normalized phone numbers in list file")
+            self.progress_bar.setValue(20)
+
+            # Compute occurrences
+            list_occurrences = (
+                list_df.groupby(["Log Type", "Phone"])
+                .size()
+                .reset_index(name="occurrence")
             )
+            list_df = pd.merge(list_df, list_occurrences, on=["Log Type", "Phone"], how="left")
+            self.update_status("Computed phone number occurrences")
+            self.progress_bar.setValue(30)
 
-            # Upload to Google Drive
-            current_date = datetime.now().strftime("%Y%m%d")
-            
-            # Upload updated list file
-            list_io = BytesIO()
-            updated_list_df.to_csv(list_io, index=False)
-            list_io.seek(0)
-            self.upload_to_drive(
-                f"Updated_List_{current_date}.csv",
-                list_io,
-                self.REMOVED_FOLDER_ID
-            )
+            # Initialize containers
+            removed_from_list = pd.DataFrame()
+            updated_log_dfs = []
+            removed_log_records = []
 
-            # Upload log files and removed records
-            for i, log_df in enumerate(updated_log_dfs):
-                log_name = self.log_files_list.item(i).text()
+            # Parse conditions and identify numbers to remove
+            self.update_status("Applying conditions...")
+            parsed_conditions = {cond["type"].title(): cond["threshold"] for cond in conditions}
+            cleaned_phones_to_remove = []
+
+            for cond_type, threshold in parsed_conditions.items():
+                matching_numbers = list_df.loc[
+                    (list_df["Log Type"].str.title() == cond_type) &
+                    (list_df["occurrence"] >= threshold), 
+                    "Phone"
+                ].unique()
+
+                if len(matching_numbers) > 0:
+                    current_removed = list_df[list_df["Phone"].isin(matching_numbers)]
+                    removed_from_list = pd.concat([removed_from_list, current_removed])
+                    list_df = list_df[~list_df["Phone"].isin(matching_numbers)]
+                    cleaned_phones_to_remove.extend([self.clean_number(phone) for phone in matching_numbers])
+                    self.update_status(f"Found {len(matching_numbers)} numbers matching condition: {cond_type}")
+
+            self.progress_bar.setValue(50)
+
+            # Process each log file
+            total_logs = len(log_dfs)
+            for i, (log_df, filename) in enumerate(zip(log_dfs, log_filenames), 1):
+                self.update_status(f"Processing log file {i}/{total_logs}: {filename}")
                 
-                # Upload scrubbed log
-                log_io = BytesIO()
-                log_df.to_csv(log_io, index=False)
-                log_io.seek(0)
-                self.upload_to_drive(
-                    f"Scrubbed_{log_name}_{current_date}.csv",
-                    log_io,
-                    self.SCRUBBED_FOLDER_ID
-                )
+                processed_log_df = log_df.copy()
+                removed_records = pd.DataFrame()
 
-                # Upload removed records if they exist
-                if not removed_log_records[i].empty:
-                    removed_io = BytesIO()
-                    removed_log_records[i].to_csv(removed_io, index=False)
-                    removed_io.seek(0)
-                    self.upload_to_drive(
-                        f"Removed_Records_{log_name}_{current_date}.csv",
-                        removed_io,
-                        self.REMOVED_FOLDER_ID
+                # Normalize column names
+                processed_log_df.columns = processed_log_df.columns.str.strip().str.lower()
+                processed_log_df = processed_log_df.astype(str)
+
+                # Find phone columns
+                phone_columns = [
+                    col for col in processed_log_df.columns
+                    if any(phrase in col.lower() for phrase in ['mobile', 'phone', 'number', 'tel', 'contact', 'ph'])
+                ]
+
+                if not phone_columns:
+                    self.update_status(f"No phone columns found in {filename}")
+                    updated_log_dfs.append(processed_log_df)
+                    removed_log_records.append(pd.DataFrame())
+                    continue
+
+                # Process phone columns
+                rows_with_removed_numbers = set()
+                for col in phone_columns:
+                    self.update_status(f"Processing column: {col}")
+                    processed_log_df[col] = processed_log_df[col].astype(str).apply(
+                        lambda x: f"{int(float(x))}" if x.replace(".", "").isdigit() else x
                     )
+                    original_values = processed_log_df[col].copy()
+                    cleaned_column = processed_log_df[col].apply(self.clean_number)
 
-            # Create local zip file
-            zip_buffer = BytesIO()
-            with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-                # Add updated list file
-                list_csv = BytesIO()
-                updated_list_df.to_csv(list_csv, index=False)
-                list_csv.seek(0)
-                zip_file.writestr(f"Updated_List_{current_date}.csv", list_csv.getvalue())
+                    # Remove matching numbers
+                    remove_mask = cleaned_column.isin(cleaned_phones_to_remove)
+                    if remove_mask.any():
+                        rows_with_removed_numbers.update(processed_log_df[remove_mask].index)
+                        self.update_status(f"Found {remove_mask.sum()} numbers to remove in {col}")
+                        processed_log_df.loc[remove_mask, col] = ''
 
-                # Add log files and their removed records
-                for i, log_df in enumerate(updated_log_dfs):
-                    log_name = self.log_files_list.item(i).text()
-                    
-                    # Add scrubbed log
-                    log_csv = BytesIO()
-                    log_df.to_csv(log_csv, index=False)
-                    log_csv.seek(0)
-                    zip_file.writestr(f"Scrubbed_{log_name}_{current_date}.csv", log_csv.getvalue())
+                # Create removed records DataFrame
+                if rows_with_removed_numbers:
+                    removed_records = processed_log_df.loc[list(rows_with_removed_numbers)].copy()
+                    self.update_status(f"Created removed records for {filename}")
 
-                    # Add removed records if they exist
-                    if not removed_log_records[i].empty:
-                        removed_csv = BytesIO()
-                        removed_log_records[i].to_csv(removed_csv, index=False)
-                        removed_csv.seek(0)
-                        zip_file.writestr(f"Removed_Records_{log_name}_{current_date}.csv", 
-                                        removed_csv.getvalue())
+                updated_log_dfs.append(processed_log_df)
+                removed_log_records.append(removed_records)
 
-            # Save zip file
-            zip_buffer.seek(0)
-            save_path, _ = QFileDialog.getSaveFileName(
-                self, "Save Processed Files", f"processed_files_{current_date}.zip", 
-                "ZIP Files (*.zip)")
-            if save_path:
-                with open(save_path, 'wb') as f:
-                    f.write(zip_buffer.getvalue())
+                progress = 50 + (i / total_logs * 40)  # Progress from 50% to 90%
+                self.progress_bar.setValue(progress)
 
-            QMessageBox.information(self, "Success", 
-                "Files processed and saved successfully!\nUploaded to Google Drive and saved locally.")
+            self.progress_bar.setValue(100)
+            self.update_status("Data processing completed successfully!")
+            return list_df, updated_log_dfs, removed_log_records
 
         except Exception as e:
-            QMessageBox.critical(self, "Error", f"Processing failed: {str(e)}")
-        finally:
-            self.process_button.setEnabled(True)
-
-    def process_data(self, log_dfs, list_df, conditions, log_filenames):
-        """Process the data"""
-        # Normalize list file phone numbers
-        list_df["Phone"] = list_df["Phone"].astype(str).apply(self.clean_number)
-
-        # Compute occurrences in the list file
-        list_occurrences = (
-            list_df.groupby(["Log Type", "Phone"])
-            .size()
-            .reset_index(name="occurrence")
-        )
-        list_df = pd.merge(list_df, list_occurrences, on=["Log Type", "Phone"], how="left")
-
-        # Initialize containers
-        removed_from_list = pd.DataFrame()
-        updated_log_dfs = []
-        removed_log_records = []
-
-        # Parse conditions
-        parsed_conditions = {cond["type"].title(): cond["threshold"] for cond in conditions}
-
-        # Identify numbers to remove
-        cleaned_phones_to_remove = []
-        for cond_type, threshold in parsed_conditions.items():
-            matching_numbers = list_df.loc[
-                (list_df["Log Type"].str.title() == cond_type) &
-                (list_df["occurrence"] >= threshold), 
-                "Phone"
-            ].unique()
-
-            if len(matching_numbers) > 0:
-                current_removed = list_df[list_df["Phone"].isin(matching_numbers)]
-                removed_from_list = pd.concat([removed_from_list, current_removed])
-                list_df = list_df[~list_df["Phone"].isin(matching_numbers)]
-                cleaned_phones_to_remove.extend([self.clean_number(phone) for phone in matching_numbers])
-
-        # Process each log file
-        for log_df, filename in zip(log_dfs, log_filenames):
-            processed_log_df = log_df.copy()
-            removed_records = pd.DataFrame()  # DataFrame for storing removed records
-
-            # Normalize column names
-            processed_log_df.columns = processed_log_df.columns.str.strip().str.lower()
-            processed_log_df = processed_log_df.astype(str)
-
-            # Identify potential phone number columns
-            phone_columns = [
-                col for col in processed_log_df.columns
-                if any(phrase in col.lower() for phrase in ['mobile', 'phone', 'number', 'tel', 'contact', 'ph'])
-            ]
-
-            if not phone_columns:
-                updated_log_dfs.append(processed_log_df)
-                removed_log_records.append(pd.DataFrame())
-                continue
-
-            # Track which rows have had numbers removed
-            rows_with_removed_numbers = set()
-
-            # Process each phone column
-            for col in phone_columns:
-                # Clean the column's phone numbers
-                processed_log_df[col] = processed_log_df[col].astype(str).apply(
-                    lambda x: f"{int(float(x))}" if x.replace(".", "").isdigit() else x
-                )
-                original_values = processed_log_df[col].copy()
-                cleaned_column = processed_log_df[col].apply(self.clean_number)
-
-                # Identify rows to remove
-                remove_mask = cleaned_column.isin(cleaned_phones_to_remove)
-
-                if remove_mask.any():
-                    # Store rows before clearing numbers
-                    rows_with_removed_numbers.update(processed_log_df[remove_mask].index)
-                    processed_log_df.loc[remove_mask, col] = ''
-
-            # Create removed records DataFrame
-            if rows_with_removed_numbers:
-                removed_records = processed_log_df.loc[list(rows_with_removed_numbers)].copy()
-
-            # Add processed DataFrames to lists
-            updated_log_dfs.append(processed_log_df)
-            removed_log_records.append(removed_records)
-
-        return list_df, updated_log_dfs, removed_log_records
+            self.update_status(f"Error processing data: {str(e)}")
+            raise e
 
 
 def main():
@@ -489,6 +494,7 @@ def main():
     window = LogProcessorApp()
     window.show()
     sys.exit(app.exec())
+
 
 if __name__ == "__main__":
     main()
