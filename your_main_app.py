@@ -14,7 +14,6 @@ import zipfile
 from datetime import datetime
 
 class LogProcessorApp(QMainWindow):
-    class LogProcessorApp(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Log Processor")
